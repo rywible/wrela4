@@ -81,6 +81,14 @@ impl<'a> Lexer<'a> {
                 self.scan_newline(start);
             } else if is_ident_start(byte) {
                 self.scan_identifier(start);
+            } else if byte == b'/'
+                && matches!(self.bytes.get(self.cursor + 1), Some(&b'/') | Some(&b'*'))
+            {
+                if self.bytes[self.cursor + 1] == b'/' {
+                    self.scan_line_comment(start);
+                } else {
+                    self.scan_block_comment(start);
+                }
             } else if let Some(punct) = self.scan_punctuation() {
                 let end = self.cursor;
                 self.push_token(TokenKind::Punct(punct), start, end);
@@ -158,6 +166,67 @@ impl<'a> Lexer<'a> {
         self.push_token(kind, start, self.cursor);
     }
 
+    fn scan_line_comment(&mut self, start: usize) {
+        let kind = if self.bytes.get(start + 2) == Some(&b'!') {
+            TriviaKind::DocComment
+        } else if self.bytes.get(start + 2) == Some(&b'/') {
+            if self.bytes.get(start + 3) == Some(&b'/') {
+                TriviaKind::LineComment
+            } else {
+                TriviaKind::DocComment
+            }
+        } else {
+            TriviaKind::LineComment
+        };
+
+        self.cursor = start + 2;
+        while self.cursor < self.bytes.len() && !is_newline_start(self.bytes[self.cursor]) {
+            self.cursor += 1;
+        }
+        self.push_trivia(kind, start, self.cursor);
+    }
+
+    fn scan_block_comment(&mut self, start: usize) {
+        let kind = if self.bytes.get(start + 2) == Some(&b'!') {
+            TriviaKind::DocComment
+        } else if self.bytes.get(start + 2) == Some(&b'*') {
+            if self.bytes.get(start + 3) == Some(&b'*') {
+                TriviaKind::BlockComment
+            } else {
+                TriviaKind::DocComment
+            }
+        } else {
+            TriviaKind::BlockComment
+        };
+
+        self.cursor = start + 2;
+        let mut depth = 1;
+        while self.cursor < self.bytes.len() && depth > 0 {
+            if self.bytes[self.cursor] == b'/'
+                && self.bytes.get(self.cursor + 1) == Some(&b'*')
+            {
+                self.cursor += 2;
+                depth += 1;
+            } else if self.bytes[self.cursor] == b'*'
+                && self.bytes.get(self.cursor + 1) == Some(&b'/')
+            {
+                self.cursor += 2;
+                depth -= 1;
+            } else {
+                self.cursor += 1;
+            }
+        }
+
+        let end = self.cursor;
+        if depth > 0 {
+            self.diagnostics.push(Diagnostic::error(
+                self.span(start, end),
+                "unterminated block comment",
+            ));
+        }
+        self.push_trivia(kind, start, end);
+    }
+
     fn scan_punctuation(&mut self) -> Option<Punct> {
         let start = self.cursor;
         let remaining = &self.bytes[start..];
@@ -225,7 +294,7 @@ fn next_char_len(text: &str, cursor: usize) -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::lexer::{Keyword, Punct, TokenKind};
+    use crate::lexer::{Keyword, Punct, TokenKind, TriviaKind};
     use crate::source::{FileId, SourceFile};
     use std::path::PathBuf;
 
@@ -283,5 +352,70 @@ mod tests {
             "é"
         );
         assert_eq!(lexed.diagnostics().len(), 1);
+    }
+
+    #[test]
+    fn preserves_whitespace_newlines_and_comments_as_trivia() {
+        let source = file("use  // hello\nfrom");
+        let lexed = lex_file(&source);
+        let trivia_kinds: Vec<TriviaKind> =
+            lexed.trivia().iter().map(|trivia| trivia.kind()).collect();
+        let token_kinds: Vec<TokenKind> =
+            lexed.tokens().iter().map(|token| token.kind()).collect();
+
+        assert_eq!(
+            token_kinds,
+            vec![
+                TokenKind::Keyword(Keyword::Use),
+                TokenKind::Keyword(Keyword::From),
+                TokenKind::Eof,
+            ]
+        );
+        assert_eq!(
+            trivia_kinds,
+            vec![
+                TriviaKind::Whitespace,
+                TriviaKind::LineComment,
+                TriviaKind::Newline,
+            ]
+        );
+    }
+
+    #[test]
+    fn preserves_doc_comments_as_distinct_trivia() {
+        let source = file("/// docs\nclass Thing {}");
+        let lexed = lex_file(&source);
+        let trivia_kinds: Vec<TriviaKind> =
+            lexed.trivia().iter().map(|trivia| trivia.kind()).collect();
+
+        assert_eq!(trivia_kinds[0], TriviaKind::DocComment);
+    }
+
+    #[test]
+    fn nested_block_comments_are_one_trivia_item() {
+        let source = file("/* outer /* inner */ done */class Thing {}");
+        let lexed = lex_file(&source);
+
+        assert_eq!(lexed.trivia()[0].kind(), TriviaKind::BlockComment);
+        assert!(lexed.diagnostics().is_empty());
+    }
+
+    #[test]
+    fn comment_edge_cases_have_stable_kinds() {
+        let source = file("//// not docs\n/**** also not docs */\n//! docs");
+        let lexed = lex_file(&source);
+        let trivia_kinds: Vec<TriviaKind> =
+            lexed.trivia().iter().map(|trivia| trivia.kind()).collect();
+
+        assert_eq!(
+            trivia_kinds,
+            vec![
+                TriviaKind::LineComment,
+                TriviaKind::Newline,
+                TriviaKind::BlockComment,
+                TriviaKind::Newline,
+                TriviaKind::DocComment,
+            ]
+        );
     }
 }
