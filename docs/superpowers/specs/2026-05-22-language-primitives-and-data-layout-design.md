@@ -17,6 +17,8 @@ This design captures the initial shape of the language nucleus:
 - Scalar branching uses exhaustive `match`, not a generic `if`.
 - Methods and phase blocks use explicit `return`.
 - Recoverable errors are typed values, not exceptions.
+- Memory is explicit authority, not an ambient allocator.
+- OOM and capacity violations trap by default.
 - Bulk logical data is columnar by default.
 - Tables and masks provide the primary vector-friendly programming model.
 - Fixed vector types and AArch64 intrinsics remain available for sharp kernels.
@@ -400,6 +402,183 @@ Traps, hardware exceptions, and `Result` errors are distinct:
 - Hardware exceptions are machine events that may be reported through fault
   policy when the platform can do so.
 
+## Memory Authority
+
+Wrela should not have ambient allocation. There is no default heap, no ordinary
+`new`, no garbage collector, no general-purpose free, and no library path that
+secretly grows memory.
+
+Memory is an explicit authority graph:
+
+- Host roots receive host-backed memory authority.
+- Appliance roots receive firmware/platform-derived physical memory authority.
+- Root arenas are named, bounded, and created from that authority.
+- Child arenas are explicitly claimed for executors, drivers, topics, queues,
+  tables, indexes, caches, DMA buffers, and scratch spaces.
+- Classes that need memory receive a memory capability through construction or
+  method parameters.
+- Ordinary modules cannot forge physical regions, arenas, byte views, or raw
+  memory authority from integers.
+
+Example root shape:
+
+```wrela
+image PacketAppliance {
+    phase boot(platform: unique QemuVirt) {
+        let region = platform.memory.require_region(
+            name = "root",
+            bytes = 64 * MiB,
+            align = 4096,
+        )
+
+        let root = region.create_arena(identity = "packet.root")
+        let rx_memory = root.child(identity = "rx", bytes = 16 * MiB, align = 4096)
+        let worker_memory = root.child(identity = "worker", bytes = 16 * MiB, align = 4096)
+
+        let worker = PacketWorker(memory = worker_memory)
+
+        return platform.vcpu0.enter(worker)
+    }
+}
+```
+
+The compiler should be able to report the memory authority tree, including
+root regions, child arenas, executor ownership, queue/topic buffers, tables,
+indexes, caches, DMA-intended buffers, and scratch frame bounds.
+
+## Durable Arenas And Frames
+
+Wrela separates durable memory from temporary frame memory.
+
+Durable arenas hold state that survives events:
+
+- executor state
+- driver state
+- topic and queue buffers
+- tables and indexes
+- caches
+- DMA buffers
+
+Frame memory is bounded scratch:
+
+```wrela
+class PacketWorker {
+    memory: ExecutorArena
+
+    fn tick(input: PacketBatch) -> None {
+        with memory.frame(bytes = 64 * KiB, align = 64) as frame {
+            let decoded = frame.place(DecodedBatch(input = input))
+            let scratch = frame.reserve(bytes = 4096, align = 64)
+
+            PacketDecoder(frame = frame).decode(batch = decoded, scratch = scratch)
+        }
+
+        return None
+    }
+}
+```
+
+Values created from a frame carry that frame lifetime. A frame-backed value
+cannot be:
+
+- returned from the method
+- stored into longer-lived state
+- assigned to a variable declared outside the frame
+- published to a topic or interrupt queue
+- captured by an executor, driver, path, cache, or shared region
+- stored in a sibling or parent frame
+
+Parent-lifetime values can be read inside child frames. Child-lifetime values
+cannot be stored into parent-lifetime values. The rule is lifetime-based, not
+name-based; aliases carry the same hidden lifetime.
+
+## Infallible Bounded Memory
+
+Default memory operations are infallible in source and trap on capacity
+violation.
+
+Examples:
+
+```wrela
+class SessionStore {
+    sessions: Table[Session, 4096]
+    by_id: Index[SessionId, 8192]
+
+    fn insert(session: Session) -> None {
+        let row = sessions.insert(session)
+        by_id.insert(key = session.id, row = row)
+
+        return None
+    }
+}
+```
+
+If `sessions` is full, or `by_id` cannot insert within its bounded policy, the
+operation traps. This is intentional: for ordinary durable memory, OOM means the
+image memory plan or input contract is wrong.
+
+Non-trapping capacity behavior must be explicit in the type or policy name:
+
+- `EvictingCache`
+- `DroppingRing`
+- `LossyTopic`
+- bounded application containers that explicitly model admission refusal
+
+Cache-full is not ordinary OOM when the cache is declared as evicting. Queue
+overflow is not ordinary OOM when the queue is declared lossy or dropping.
+Those are domain policies, not hidden allocation failures. Ordinary table,
+index, arena, frame, and ring capacity violations trap by default.
+
+## Tables And Indexes
+
+Wrela should not provide a built-in unbounded `HashMap`. Hash maps combine
+ambient growth, pointer-heavy layout, collision policy, and value storage in a
+way that works against Wrela's memory model.
+
+The primitive split is:
+
+- `Table[T, N]` owns colocated row storage.
+- `Index[K, N]` owns lookup metadata.
+- An index maps keys to table rows; it does not own row data.
+
+Example:
+
+```wrela
+data Session {
+    id: SessionId
+    state: SessionState
+    last_seen: Tick
+}
+
+class SessionStore {
+    sessions: Table[Session, 4096]
+    by_id: Index[SessionId, 8192]
+
+    fn mark_active(id: SessionId, now: Tick) -> None {
+        let row = by_id.require(id)
+
+        sessions.state[row] = SessionState.Active
+        sessions.last_seen[row] = now
+
+        return None
+    }
+}
+```
+
+Different classes can choose different index strategies by owning different
+index types:
+
+- open-addressed index
+- sorted index
+- dense integer index
+- bitmap-backed set/index
+- direct table row id
+
+Wrela should start without sugar over `Index + Table`. Users can compose their
+own classes around tables and indexes. If a future pattern proves common, the
+language can add indexed-table views later without changing the primitive memory
+model.
+
 ## Logical Data
 
 `data` declares a logical record schema. It does not promise a physical
@@ -457,7 +636,9 @@ let sources = packets.src
 
 Tables are a logical data model, not a stable object-address model. Taking the
 address of a row should be restricted because there may not be an addressable
-array-of-structs row in memory.
+array-of-structs row in memory. Tables are also bounded storage: inserting past
+declared capacity traps unless the table type explicitly advertises a
+non-trapping policy.
 
 ## Masks
 
@@ -685,6 +866,10 @@ This design does not require:
 - Exceptions or hidden stack unwinding.
 - Ambient panic or process-exit behavior.
 - Top-level free functions.
+- Ambient heap allocation.
+- General-purpose garbage collection or free.
+- Built-in unbounded hash maps.
+- Initial sugar over `Index + Table`.
 
 ## Initial Language Shape
 
@@ -699,8 +884,11 @@ The first language nucleus should include:
 - `Option[T]`, `Result[T, E]`, and closed `error` sums.
 - `try`, `try else return`, and expanded `try else err { ... }`.
 - `trap` as a `Never`-typed abnormal control-flow boundary.
+- memory authority roots and bounded arenas.
+- `with` frames for scoped scratch memory.
 - `data` for logical records.
 - `Table[T]` for columnar bulk logical data.
+- `Index[K, N]` for bounded lookup metadata over tables.
 - `Mask` for row selection and predication.
 - `layout` for physical memory representation.
 - `Vec[N, T]` for fixed vector kernels.
@@ -715,10 +903,15 @@ without making either one masquerade as the other.
 The next design pass should settle:
 
 - Exact `Table` capacity syntax and whether capacity is always static.
+- Exact `Index` strategy syntax and whether strategy is a type, constructor, or
+  policy field.
 - Whether `Mask` is parameterized by capacity, table identity, or lane count.
 - How table row iteration works without exposing row addresses.
 - How table columns interact with ownership and borrowing.
 - How masked writes report or forbid overlapping aliases.
+- Exact arena type names for root, executor, driver, DMA, table, cache, and
+  scratch memory.
+- Exact trap report payload for OOM and capacity violations.
 - Whether `layout mmio` uses a distinct `Mmio[T]` field type or an enclosing
   layout rule.
 - How `Vec[N, T]` values interact with ABI boundaries.
