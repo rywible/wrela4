@@ -158,7 +158,22 @@ fn parse_module_path(
     }
 
     let span = Span::new(first.span().file_id(), path_start, path_end);
+    if let Some(diagnostic) = validate_module_segments(&segments, span) {
+        return Err(diagnostic);
+    }
     Ok((ModulePath::new(segments), span))
+}
+
+fn validate_module_segments(segments: &[String], span: Span) -> Option<Diagnostic> {
+    for segment in segments {
+        if segment == "wrela" {
+            return Some(Diagnostic::error(
+                span,
+                "module path must not include file extension",
+            ));
+        }
+    }
+    None
 }
 
 fn skip_to_next_use(tokens: &[Token], mut index: usize) -> usize {
@@ -252,6 +267,26 @@ mod tests {
         assert_eq!(
             summary.diagnostics()[0].message(),
             "expected module path after from"
+        );
+    }
+
+    #[test]
+    fn rejects_module_path_with_trailing_dot() {
+        let summary = summary("use { Console } from app.console.");
+
+        assert_eq!(
+            summary.diagnostics()[0].message(),
+            "expected identifier after dot in module path"
+        );
+    }
+
+    #[test]
+    fn rejects_module_path_with_file_extension_segment() {
+        let summary = summary("use { Console } from app.console.wrela");
+
+        assert_eq!(
+            summary.diagnostics()[0].message(),
+            "module path must not include file extension"
         );
     }
 }
