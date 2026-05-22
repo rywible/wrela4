@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -60,6 +60,11 @@ fn merge_diagnostics(
     import_summaries: &[ImportSummary],
     import_load_records: &[ImportLoadRecord],
 ) -> Vec<Diagnostic> {
+    let lexed_by_file: BTreeMap<FileId, &LexedFile> = lexed_files
+        .iter()
+        .map(|lexed| (lexed.file_id(), lexed))
+        .collect();
+
     let summary_by_file: BTreeMap<FileId, &ImportSummary> = lexed_files
         .iter()
         .zip(import_summaries.iter())
@@ -79,7 +84,7 @@ fn merge_diagnostics(
     for file in source_map.files() {
         let file_id = file.id();
 
-        if let Some(lexed) = lexed_files.iter().find(|lexed| lexed.file_id() == file_id) {
+        if let Some(lexed) = lexed_by_file.get(&file_id) {
             diagnostics.extend(lexed.diagnostics().iter().cloned());
         }
 
@@ -138,9 +143,10 @@ pub fn discover_from_root(root: impl AsRef<Path>) -> DiscoverResult {
     let mut pending_imports: BTreeMap<PathBuf, Vec<(FileId, Span)>> = BTreeMap::new();
     let mut lexed_up_to = 0usize;
 
-    let mut batch = vec![root_path];
+    let mut frontier: VecDeque<PathBuf> = VecDeque::from([root_path]);
 
-    while !batch.is_empty() {
+    while !frontier.is_empty() {
+        let mut batch: Vec<PathBuf> = frontier.drain(..).collect();
         batch.sort();
 
         for path in &batch {
@@ -217,7 +223,9 @@ pub fn discover_from_root(root: impl AsRef<Path>) -> DiscoverResult {
             }
         }
 
-        batch = next_paths.into_iter().collect();
+        let mut next_batch: Vec<PathBuf> = next_paths.into_iter().collect();
+        next_batch.sort();
+        frontier.extend(next_batch);
         pending_imports = next_pending;
     }
 

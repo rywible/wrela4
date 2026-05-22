@@ -251,17 +251,7 @@ impl<'a> Lexer<'a> {
     }
 
     fn scan_line_comment(&mut self, start: usize) {
-        let kind = if self.bytes.get(start + 2) == Some(&b'!') {
-            TriviaKind::DocComment
-        } else if self.bytes.get(start + 2) == Some(&b'/') {
-            if self.bytes.get(start + 3) == Some(&b'/') {
-                TriviaKind::LineComment
-            } else {
-                TriviaKind::DocComment
-            }
-        } else {
-            TriviaKind::LineComment
-        };
+        let kind = line_comment_kind(self.bytes, start);
 
         self.cursor = start + 2;
         while self.cursor < self.bytes.len() && !is_newline_start(self.bytes[self.cursor]) {
@@ -271,17 +261,7 @@ impl<'a> Lexer<'a> {
     }
 
     fn scan_block_comment(&mut self, start: usize) {
-        let kind = if self.bytes.get(start + 2) == Some(&b'!') {
-            TriviaKind::DocComment
-        } else if self.bytes.get(start + 2) == Some(&b'*') {
-            if self.bytes.get(start + 3) == Some(&b'*') {
-                TriviaKind::BlockComment
-            } else {
-                TriviaKind::DocComment
-            }
-        } else {
-            TriviaKind::BlockComment
-        };
+        let kind = block_comment_kind(self.bytes, start);
 
         self.cursor = start + 2;
         let mut depth = 1;
@@ -371,6 +351,34 @@ fn is_whitespace(byte: u8) -> bool {
 
 fn is_newline_start(byte: u8) -> bool {
     matches!(byte, b'\n' | b'\r')
+}
+
+fn line_comment_kind(bytes: &[u8], start: usize) -> TriviaKind {
+    if bytes.get(start + 2) == Some(&b'!') {
+        TriviaKind::DocComment
+    } else if bytes.get(start + 2) == Some(&b'/') {
+        if bytes.get(start + 3) == Some(&b'/') {
+            TriviaKind::LineComment
+        } else {
+            TriviaKind::DocComment
+        }
+    } else {
+        TriviaKind::LineComment
+    }
+}
+
+fn block_comment_kind(bytes: &[u8], start: usize) -> TriviaKind {
+    if bytes.get(start + 2) == Some(&b'!') {
+        TriviaKind::DocComment
+    } else if bytes.get(start + 2) == Some(&b'*') {
+        if bytes.get(start + 3) == Some(&b'*') {
+            TriviaKind::BlockComment
+        } else {
+            TriviaKind::DocComment
+        }
+    } else {
+        TriviaKind::BlockComment
+    }
 }
 
 fn next_char_len(text: &str, cursor: usize) -> usize {
