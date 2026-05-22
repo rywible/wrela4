@@ -3,9 +3,9 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use crate::diagnostic::Diagnostic;
-use crate::lexer::{lex_files_parallel, LexedFile};
+use crate::lexer::{LexedFile, lex_files_parallel};
 use crate::source::{FileId, SourceMap, Span};
-use crate::syntax::imports::{parse_import_summary, ImportSummary, ModulePath};
+use crate::syntax::imports::{ImportSummary, ModulePath, parse_import_summary};
 
 #[derive(Debug)]
 pub struct DiscoverResult {
@@ -123,10 +123,7 @@ pub fn discover_from_root(root: impl AsRef<Path>) -> DiscoverResult {
         }
     };
 
-    let source_root = root_path
-        .parent()
-        .unwrap_or(Path::new("."))
-        .to_path_buf();
+    let source_root = root_path.parent().unwrap_or(Path::new(".")).to_path_buf();
 
     let mut source_map = SourceMap::new();
     let root_id = source_map.add_loaded_file(root_path.clone(), root_text);
@@ -188,7 +185,9 @@ pub fn discover_from_root(root: impl AsRef<Path>) -> DiscoverResult {
             lexed_up_to = end;
 
             for lexed in &batch_lexed {
-                let source = source_map.get(lexed.file_id()).expect("lexed file in source map");
+                let source = source_map
+                    .get(lexed.file_id())
+                    .expect("lexed file in source map");
                 import_summaries.push(parse_import_summary(lexed, source));
             }
 
@@ -319,9 +318,12 @@ mod tests {
 
         let result = discover_from_root(&root);
 
-        assert!(result.diagnostics().iter().any(|diagnostic| {
-            diagnostic.message() == "could not load imported file"
-        }));
+        assert!(
+            result
+                .diagnostics()
+                .iter()
+                .any(|diagnostic| { diagnostic.message() == "could not load imported file" })
+        );
     }
 
     #[test]
@@ -330,7 +332,10 @@ mod tests {
         let result = discover_from_root(dir.path().join("missing.wrela"));
 
         assert_eq!(result.source_map().files().len(), 0);
-        assert_eq!(result.diagnostics()[0].message(), "could not load root file");
+        assert_eq!(
+            result.diagnostics()[0].message(),
+            "could not load root file"
+        );
         assert!(result.diagnostics()[0].span().is_none());
     }
 }

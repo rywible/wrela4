@@ -24,7 +24,11 @@ pub struct Span {
 
 impl Span {
     pub const fn new(file_id: FileId, start: u32, end: u32) -> Self {
-        Self { file_id, start, end }
+        Self {
+            file_id,
+            start,
+            end,
+        }
     }
 
     pub const fn file_id(self) -> FileId {
@@ -59,7 +63,12 @@ pub struct SourceFile {
 impl SourceFile {
     pub fn new(id: FileId, path: PathBuf, text: String) -> Self {
         let line_starts = compute_line_starts(&text);
-        Self { id, path, text, line_starts }
+        Self {
+            id,
+            path,
+            text,
+            line_starts,
+        }
     }
 
     pub fn id(&self) -> FileId {
@@ -147,7 +156,11 @@ mod tests {
 
     #[test]
     fn source_file_computes_line_starts() {
-        let file = SourceFile::new(FileId::new(7), PathBuf::from("sample.wrela"), "one\rtwo\nthree\r\nfour".to_string());
+        let file = SourceFile::new(
+            FileId::new(7),
+            PathBuf::from("sample.wrela"),
+            "one\rtwo\nthree\r\nfour".to_string(),
+        );
 
         assert_eq!(file.line_starts(), &[0, 4, 8, 15]);
     }

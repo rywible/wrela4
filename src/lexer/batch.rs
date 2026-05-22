@@ -2,7 +2,7 @@ use std::thread;
 
 use crate::source::SourceFile;
 
-use super::lex::{lex_file, LexedFile};
+use super::lex::{LexedFile, lex_file};
 
 pub fn lex_files_parallel(files: &[SourceFile]) -> Vec<LexedFile> {
     if files.is_empty() {
@@ -45,7 +45,11 @@ mod tests {
     use std::path::PathBuf;
 
     fn source(id: u32, text: &str) -> SourceFile {
-        SourceFile::new(FileId::new(id), PathBuf::from(format!("{id}.wrela")), text.to_string())
+        SourceFile::new(
+            FileId::new(id),
+            PathBuf::from(format!("{id}.wrela")),
+            text.to_string(),
+        )
     }
 
     #[test]
@@ -67,7 +71,12 @@ mod tests {
         let files = vec![source(0, "class A {}"), source(1, "@")];
         let lexed = lex_files_parallel(&files);
 
-        assert!(lexed[0].tokens().iter().any(|token| token.kind() == TokenKind::Keyword(crate::lexer::Keyword::Class)));
+        assert!(
+            lexed[0]
+                .tokens()
+                .iter()
+                .any(|token| token.kind() == TokenKind::Keyword(crate::lexer::Keyword::Class))
+        );
         assert_eq!(lexed[1].diagnostics().len(), 1);
     }
 }

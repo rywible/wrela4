@@ -49,7 +49,10 @@ pub struct ImportSummary {
 
 impl ImportSummary {
     pub fn new(imports: Vec<ImportEdge>, diagnostics: Vec<Diagnostic>) -> Self {
-        Self { imports, diagnostics }
+        Self {
+            imports,
+            diagnostics,
+        }
     }
 
     pub fn imports(&self) -> &[ImportEdge] {
@@ -78,10 +81,7 @@ pub fn parse_import_summary(lexed: &LexedFile, source: &SourceFile) -> ImportSum
 
         loop {
             if index >= tokens.len() {
-                diagnostics.push(Diagnostic::error(
-                    use_span,
-                    "expected from in use import",
-                ));
+                diagnostics.push(Diagnostic::error(use_span, "expected from in use import"));
                 break;
             }
 
@@ -102,18 +102,12 @@ pub fn parse_import_summary(lexed: &LexedFile, source: &SourceFile) -> ImportSum
                     break;
                 }
                 TokenKind::Keyword(Keyword::Use) => {
-                    diagnostics.push(Diagnostic::error(
-                        use_span,
-                        "expected from in use import",
-                    ));
+                    diagnostics.push(Diagnostic::error(use_span, "expected from in use import"));
                     use_span = tokens[index].span();
                     index += 1;
                 }
                 TokenKind::Eof => {
-                    diagnostics.push(Diagnostic::error(
-                        use_span,
-                        "expected from in use import",
-                    ));
+                    diagnostics.push(Diagnostic::error(use_span, "expected from in use import"));
                     index = tokens.len();
                     break;
                 }
@@ -177,7 +171,7 @@ fn skip_to_next_use(tokens: &[Token], mut index: usize) -> usize {
     index
 }
 
-fn token_text<'a>(source: &'a SourceFile, token: Token) -> &'a str {
+fn token_text(source: &SourceFile, token: Token) -> &str {
     let start = token.span().start() as usize;
     let end = token.span().end() as usize;
     debug_assert!(source.text().is_char_boundary(start));
@@ -193,7 +187,11 @@ mod tests {
     use std::path::PathBuf;
 
     fn summary(text: &str) -> ImportSummary {
-        let source = SourceFile::new(FileId::new(0), PathBuf::from("root.wrela"), text.to_string());
+        let source = SourceFile::new(
+            FileId::new(0),
+            PathBuf::from("root.wrela"),
+            text.to_string(),
+        );
         let lexed = lex_file(&source);
         parse_import_summary(&lexed, &source)
     }

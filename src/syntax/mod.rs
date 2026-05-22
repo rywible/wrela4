@@ -1,2 +1,2 @@
 pub mod imports;
-pub use imports::{parse_import_summary, ImportEdge, ImportSummary, ModulePath};
+pub use imports::{ImportEdge, ImportSummary, ModulePath, parse_import_summary};

@@ -2,11 +2,13 @@ use std::path::PathBuf;
 
 use wrela::diagnostic::has_errors;
 use wrela::discover::discover_from_root;
-use wrela::lexer::{lex_file, TokenKind, TriviaKind};
+use wrela::lexer::{TokenKind, TriviaKind, lex_file};
 use wrela::source::{FileId, SourceFile};
 
 fn fixture(path: &str) -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("fixtures/lexer").join(path)
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("fixtures/lexer")
+        .join(path)
 }
 
 #[test]
@@ -17,7 +19,12 @@ fn basic_fixture_lexes_without_errors() {
     let lexed = lex_file(&source);
 
     assert!(!has_errors(lexed.diagnostics()));
-    assert!(lexed.tokens().iter().any(|token| token.kind() == TokenKind::StringLiteral));
+    assert!(
+        lexed
+            .tokens()
+            .iter()
+            .any(|token| token.kind() == TokenKind::StringLiteral)
+    );
 }
 
 #[test]
@@ -40,7 +47,12 @@ fn errors_fixture_reports_recoverable_lexer_errors() {
     let lexed = lex_file(&source);
 
     assert!(has_errors(lexed.diagnostics()));
-    assert!(lexed.tokens().iter().any(|token| token.kind() == TokenKind::Keyword(wrela::lexer::Keyword::Let)));
+    assert!(
+        lexed
+            .tokens()
+            .iter()
+            .any(|token| token.kind() == TokenKind::Keyword(wrela::lexer::Keyword::Let))
+    );
 }
 
 #[test]
@@ -50,7 +62,13 @@ fn root_discovery_reaches_imported_files() {
         .source_map()
         .files()
         .iter()
-        .map(|file| file.path().file_name().unwrap().to_string_lossy().to_string())
+        .map(|file| {
+            file.path()
+                .file_name()
+                .unwrap()
+                .to_string_lossy()
+                .to_string()
+        })
         .collect();
 
     assert_eq!(files, vec!["root.wrela", "console.wrela", "storage.wrela"]);

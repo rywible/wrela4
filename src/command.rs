@@ -1,8 +1,8 @@
 use std::path::Path;
 
-use crate::diagnostic::{has_errors, Diagnostic};
+use crate::diagnostic::{Diagnostic, has_errors};
 use crate::discover::discover_from_root;
-use crate::lexer::{lex_file, LexedFile, Token, Trivia};
+use crate::lexer::{LexedFile, Token, Trivia, lex_file};
 use crate::source::{FileId, SourceFile, SourceMap, Span};
 
 pub fn run<I>(args: I) -> i32
@@ -127,11 +127,7 @@ where
 
     print_diagnostics(out, diagnostics);
 
-    if has_errors(diagnostics) {
-        1
-    } else {
-        0
-    }
+    if has_errors(diagnostics) { 1 } else { 0 }
 }
 
 fn print_lexed_items<W>(out: &mut W, lexed: &LexedFile)
@@ -223,7 +219,11 @@ mod tests {
     fn help_lists_lexer_commands() {
         let mut out = Vec::new();
         let mut err = Vec::new();
-        let code = run_with_io(vec!["wrela".to_string(), "help".to_string()], &mut out, &mut err);
+        let code = run_with_io(
+            vec!["wrela".to_string(), "help".to_string()],
+            &mut out,
+            &mut err,
+        );
 
         assert_eq!(code, 0);
         let out = String::from_utf8(out).unwrap();
@@ -236,9 +236,17 @@ mod tests {
     fn unknown_command_exits_two() {
         let mut out = Vec::new();
         let mut err = Vec::new();
-        let code = run_with_io(vec!["wrela".to_string(), "wat".to_string()], &mut out, &mut err);
+        let code = run_with_io(
+            vec!["wrela".to_string(), "wat".to_string()],
+            &mut out,
+            &mut err,
+        );
 
         assert_eq!(code, 2);
-        assert!(String::from_utf8(err).unwrap().contains("unknown command: wat"));
+        assert!(
+            String::from_utf8(err)
+                .unwrap()
+                .contains("unknown command: wat")
+        );
     }
 }

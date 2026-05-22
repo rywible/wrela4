@@ -109,12 +109,7 @@ impl<'a> Lexer<'a> {
         let end = self.bytes.len();
         self.push_token(TokenKind::Eof, end, end);
 
-        LexedFile::new(
-            self.source.id(),
-            self.tokens,
-            self.trivia,
-            self.diagnostics,
-        )
+        LexedFile::new(self.source.id(), self.tokens, self.trivia, self.diagnostics)
     }
 
     fn file_id(&self) -> FileId {
@@ -148,9 +143,7 @@ impl<'a> Lexer<'a> {
     }
 
     fn scan_newline(&mut self, start: usize) {
-        if self.bytes[self.cursor] == b'\r'
-            && self.bytes.get(self.cursor + 1) == Some(&b'\n')
-        {
+        if self.bytes[self.cursor] == b'\r' && self.bytes.get(self.cursor + 1) == Some(&b'\n') {
             self.cursor += 2;
         } else {
             self.cursor += 1;
@@ -171,16 +164,20 @@ impl<'a> Lexer<'a> {
                     "hex literal requires digits",
                 ));
             }
-            while self.bytes.get(self.cursor).is_some_and(|&byte| {
-                is_hex_digit(byte) || byte == b'_'
-            }) {
+            while self
+                .bytes
+                .get(self.cursor)
+                .is_some_and(|&byte| is_hex_digit(byte) || byte == b'_')
+            {
                 self.cursor += 1;
             }
         } else {
             self.cursor = start + 1;
-            while self.bytes.get(self.cursor).is_some_and(|&byte| {
-                byte.is_ascii_digit() || byte == b'_'
-            }) {
+            while self
+                .bytes
+                .get(self.cursor)
+                .is_some_and(|&byte| byte.is_ascii_digit() || byte == b'_')
+            {
                 self.cursor += 1;
             }
         }
@@ -217,10 +214,7 @@ impl<'a> Lexer<'a> {
                     break;
                 }
                 let escaped = self.bytes[self.cursor];
-                if matches!(
-                    escaped,
-                    b'\\' | b'"' | b'n' | b'r' | b't' | b'0'
-                ) {
+                if matches!(escaped, b'\\' | b'"' | b'n' | b'r' | b't' | b'0') {
                     self.cursor += 1;
                 } else {
                     self.diagnostics.push(Diagnostic::error(
@@ -292,9 +286,7 @@ impl<'a> Lexer<'a> {
         self.cursor = start + 2;
         let mut depth = 1;
         while self.cursor < self.bytes.len() && depth > 0 {
-            if self.bytes[self.cursor] == b'/'
-                && self.bytes.get(self.cursor + 1) == Some(&b'*')
-            {
+            if self.bytes[self.cursor] == b'/' && self.bytes.get(self.cursor + 1) == Some(&b'*') {
                 self.cursor += 2;
                 depth += 1;
             } else if self.bytes[self.cursor] == b'*'
@@ -393,7 +385,11 @@ mod tests {
     use std::path::PathBuf;
 
     fn file(text: &str) -> SourceFile {
-        SourceFile::new(FileId::new(0), PathBuf::from("test.wrela"), text.to_string())
+        SourceFile::new(
+            FileId::new(0),
+            PathBuf::from("test.wrela"),
+            text.to_string(),
+        )
     }
 
     #[test]
@@ -454,8 +450,7 @@ mod tests {
         let lexed = lex_file(&source);
         let trivia_kinds: Vec<TriviaKind> =
             lexed.trivia().iter().map(|trivia| trivia.kind()).collect();
-        let token_kinds: Vec<TokenKind> =
-            lexed.tokens().iter().map(|token| token.kind()).collect();
+        let token_kinds: Vec<TokenKind> = lexed.tokens().iter().map(|token| token.kind()).collect();
 
         assert_eq!(
             token_kinds,
@@ -529,17 +524,22 @@ mod tests {
         let source = file("let name = \"unterminated\nclass Next {}");
         let lexed = lex_file(&source);
 
-        assert!(lexed
-            .tokens()
-            .iter()
-            .any(|token| token.kind() == TokenKind::StringLiteral));
+        assert!(
+            lexed
+                .tokens()
+                .iter()
+                .any(|token| token.kind() == TokenKind::StringLiteral)
+        );
         assert_eq!(
             lexed.diagnostics()[0].message(),
             "unterminated string literal"
         );
-        assert!(lexed.tokens().iter().any(|token| {
-            token.kind() == TokenKind::Keyword(Keyword::Class)
-        }));
+        assert!(
+            lexed
+                .tokens()
+                .iter()
+                .any(|token| { token.kind() == TokenKind::Keyword(Keyword::Class) })
+        );
     }
 
     #[test]

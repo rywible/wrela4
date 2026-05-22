@@ -24,7 +24,11 @@ pub struct Diagnostic {
 
 impl Diagnostic {
     pub fn new(severity: Severity, span: Option<Span>, message: impl Into<String>) -> Self {
-        Self { severity, span, message: message.into() }
+        Self {
+            severity,
+            span,
+            message: message.into(),
+        }
     }
 
     pub fn error(span: Span, message: impl Into<String>) -> Self {
@@ -67,7 +71,9 @@ impl Diagnostic {
 }
 
 pub fn has_errors(diagnostics: &[Diagnostic]) -> bool {
-    diagnostics.iter().any(|diagnostic| diagnostic.severity == Severity::Error)
+    diagnostics
+        .iter()
+        .any(|diagnostic| diagnostic.severity == Severity::Error)
 }
 
 #[cfg(test)]
@@ -78,8 +84,16 @@ mod tests {
     #[test]
     fn detects_errors() {
         let diagnostics = vec![
-            Diagnostic::new(Severity::Warning, Some(Span::new(FileId::new(0), 1, 2)), "warning"),
-            Diagnostic::new(Severity::Error, Some(Span::new(FileId::new(0), 2, 3)), "error"),
+            Diagnostic::new(
+                Severity::Warning,
+                Some(Span::new(FileId::new(0), 1, 2)),
+                "warning",
+            ),
+            Diagnostic::new(
+                Severity::Error,
+                Some(Span::new(FileId::new(0), 2, 3)),
+                "error",
+            ),
         ];
 
         assert!(has_errors(&diagnostics));
@@ -87,7 +101,11 @@ mod tests {
 
     #[test]
     fn renders_single_line() {
-        let diagnostic = Diagnostic::new(Severity::Error, Some(Span::new(FileId::new(3), 4, 9)), "bad token");
+        let diagnostic = Diagnostic::new(
+            Severity::Error,
+            Some(Span::new(FileId::new(3), 4, 9)),
+            "bad token",
+        );
 
         assert_eq!(diagnostic.render_compact(), "error[file=3 4..9]: bad token");
     }
@@ -96,6 +114,9 @@ mod tests {
     fn renders_unspanned_diagnostics() {
         let diagnostic = Diagnostic::new(Severity::Error, None, "could not load root file");
 
-        assert_eq!(diagnostic.render_compact(), "error: could not load root file");
+        assert_eq!(
+            diagnostic.render_compact(),
+            "error: could not load root file"
+        );
     }
 }
