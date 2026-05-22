@@ -277,7 +277,7 @@ The compiler enforces the test model with these rules:
 - `test` declarations are valid only in test-capable containers, initially
   classes.
 - A class with at least one `test` declaration is a test suite.
-- `TestRunner.run([...])` accepts only values whose classes contain test
+- `TestRunner.run(suites)` accepts only values whose classes contain test
   metadata.
 - A test body can access suite fields and its own `with` fixtures.
 - A `with` fixture expression can use suite fields and earlier fixtures from the
@@ -336,4 +336,6 @@ The following language primitives still need to be designed:
 - How runner result reporting is modeled without hidden process exit behavior.
 - How arrays of heterogeneous test suites are represented.
 
-These questions should be handled while designing the language nucleus.
+These questions should be handled while designing the language nucleus. The
+initial language/data-layout direction is captured in
+`docs/superpowers/specs/2026-05-22-language-primitives-and-data-layout-design.md`.
