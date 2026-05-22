@@ -157,6 +157,27 @@ fn parse_module_path(
         *index += 1;
     }
 
+    if *index < tokens.len() && tokens[*index].kind() == TokenKind::Punct(Punct::Slash) {
+        while *index < tokens.len() {
+            match tokens[*index].kind() {
+                TokenKind::Punct(Punct::Slash) => {
+                    path_end = tokens[*index].span().end();
+                    *index += 1;
+                }
+                TokenKind::Identifier => {
+                    path_end = tokens[*index].span().end();
+                    *index += 1;
+                }
+                _ => break,
+            }
+        }
+        let span = Span::new(first.span().file_id(), path_start, path_end);
+        return Err(Diagnostic::error(
+            span,
+            "invalid path separator in module path",
+        ));
+    }
+
     let span = Span::new(first.span().file_id(), path_start, path_end);
     if let Some(diagnostic) = validate_module_segments(&segments, span) {
         return Err(diagnostic);
@@ -287,6 +308,17 @@ mod tests {
         assert_eq!(
             summary.diagnostics()[0].message(),
             "module path must not include file extension"
+        );
+    }
+
+    #[test]
+    fn rejects_module_path_with_slash_separator() {
+        let summary = summary("use { Console } from app/console");
+
+        assert!(summary.imports().is_empty());
+        assert_eq!(
+            summary.diagnostics()[0].message(),
+            "invalid path separator in module path"
         );
     }
 }

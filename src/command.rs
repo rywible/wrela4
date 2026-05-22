@@ -23,19 +23,40 @@ where
     let collected: Vec<String> = args.into_iter().collect();
 
     match collected.get(1).map(String::as_str) {
-        Some("help") | None => {
+        Some("help") => {
+            if collected.len() > 2 {
+                let _ = writeln!(err, "malformed command");
+                return 2;
+            }
+            let _ = writeln!(out, "wrela commands: help, version");
+            let _ = writeln!(out, "wrela lex <root.wrela>");
+            let _ = writeln!(out, "wrela dump tokens <file.wrela>");
+            0
+        }
+        None => {
             let _ = writeln!(out, "wrela commands: help, version");
             let _ = writeln!(out, "wrela lex <root.wrela>");
             let _ = writeln!(out, "wrela dump tokens <file.wrela>");
             0
         }
         Some("version") => {
+            if collected.len() > 2 {
+                let _ = writeln!(err, "malformed command");
+                return 2;
+            }
             let _ = writeln!(out, "wrela 0.1.0");
             0
         }
         Some("dump") => match collected.get(2).map(String::as_str) {
             Some("tokens") => match collected.get(3) {
-                Some(path) => dump_tokens(path, out, err),
+                Some(path) => {
+                    if collected.len() > 4 {
+                        let _ = writeln!(err, "malformed command");
+                        2
+                    } else {
+                        dump_tokens(path, out, err)
+                    }
+                }
                 None => {
                     let _ = writeln!(err, "missing file path");
                     2
@@ -47,7 +68,14 @@ where
             }
         },
         Some("lex") => match collected.get(2) {
-            Some(path) => lex_root(path, out, err),
+            Some(path) => {
+                if collected.len() > 3 {
+                    let _ = writeln!(err, "malformed command");
+                    2
+                } else {
+                    lex_root(path, out, err)
+                }
+            }
             None => {
                 let _ = writeln!(err, "missing root file path");
                 2
@@ -247,6 +275,29 @@ mod tests {
             String::from_utf8(err)
                 .unwrap()
                 .contains("unknown command: wat")
+        );
+    }
+
+    #[test]
+    fn surplus_lex_args_exit_two() {
+        let mut out = Vec::new();
+        let mut err = Vec::new();
+        let code = run_with_io(
+            vec![
+                "wrela".to_string(),
+                "lex".to_string(),
+                "root.wrela".to_string(),
+                "extra".to_string(),
+            ],
+            &mut out,
+            &mut err,
+        );
+
+        assert_eq!(code, 2);
+        assert!(
+            String::from_utf8(err)
+                .unwrap()
+                .contains("malformed command")
         );
     }
 }
