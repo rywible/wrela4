@@ -17,6 +17,8 @@ This design captures the initial shape of the language nucleus:
 - Interfaces are static compile-time contracts, not runtime vtables.
 - Class fields are immutable after construction.
 - Class values move by default; shared dependencies must be `read`.
+- Generics are compile-time only and use capitalized constraints.
+- Interface names are static constraints, not hidden runtime field types.
 - Scalar branching uses exhaustive `match`, not a generic `if`.
 - Methods and phase blocks use explicit `return`.
 - Recoverable errors are typed values, not exceptions.
@@ -241,17 +243,127 @@ pointers, dynamic dispatch, hidden allocation, or runtime type dictionaries.
 
 ```wrela
 interface BlockDevice {
-    fn read(index: U64, out: Buffer[U8]) -> Result[None, DiskError]
-    fn write(index: U64, data: Buffer[U8]) -> Result[None, DiskError]
+    fn read(mut self, index: U64, out: Buffer[U8]) -> Result[None, DiskError]
+    fn write(mut self, index: U64, data: Buffer[U8]) -> Result[None, DiskError]
 }
 ```
 
 A class satisfies an interface by providing the required methods. Calls through
 interface-constrained generics are statically resolved or monomorphized.
+Receiver mode is part of the contract.
+
+An interface name is not a default runtime type. Fields and parameters must be
+concrete types or generic type parameters constrained by interfaces.
+
+```wrela
+class BadLoader {
+    disk: BlockDevice // invalid: would require a hidden runtime interface value
+
+    fn read_block(mut self, index: U64, out: Buffer[U8]) -> Result[None, DiskError] {
+        return disk.read(index = index, out = out)
+    }
+}
+
+class Loader<D: BlockDevice> {
+    disk: D
+
+    fn read_block(mut self, index: U64, out: Buffer[U8]) -> Result[None, DiskError] {
+        return disk.read(index = index, out = out)
+    }
+}
+```
 
 Dynamic dispatch, if Wrela ever needs it, must be an explicit value such as a
 declared dispatch table capability. It is not the default meaning of
 `interface`.
+
+## Generics And Static Interfaces
+
+Wrela generics are compile-time parameters. They should make reuse possible
+without adding runtime dictionaries, hidden type metadata, implicit allocation,
+or dynamic dispatch.
+
+The initial generic parameter kinds are:
+
+- Type parameters: `T: Data`, `D: BlockDevice`, `C: Console`.
+- Const parameters: `Rows: Const[U32]`, `Bytes: Const[U64]`.
+- Capacity parameters as ordinary const parameters used by tables, indexes,
+  rings, queues, and arenas.
+
+Constraints use capitalized names. Built-in constraints should start small:
+
+- `Copy`: values can be copied implicitly.
+- `Move`: values can be moved and consumed.
+- `Data`: logical record values suitable for table storage.
+- `Stored`: values with compiler-known storage requirements.
+- `Unique`: authority-bearing values with graph checks.
+- Interface names such as `BlockDevice`, `Clock`, or `Console`.
+- `Const[T]`: compile-time constant values of scalar type `T`.
+
+Example:
+
+```wrela
+interface HeaderParsing {
+    fn parse(read self, bytes: Buffer[U8]) -> Result[Header, HeaderError]
+}
+
+class HeaderLoader<D: BlockDevice, P: HeaderParsing> {
+    disk: D
+    parser: P
+
+    fn load(mut self, out: Buffer[U8]) -> Result[Header, LoadError] {
+        try disk.read(index = 0, out = out) else return LoadError.Disk
+
+        let header = try parser.parse(bytes = out) else return LoadError.Parse
+
+        return Ok(header)
+    }
+}
+```
+
+`HeaderLoader` has no interface-typed fields. A root image constructs it with
+concrete values, and the compiler specializes the used instance.
+
+Capacity-shaped types use const generics:
+
+```wrela
+unique class SessionStore<Rows: Const[U32], IndexSlots: Const[U32]> {
+    sessions: Table[Session, Rows]
+    by_id: Index[SessionId, IndexSlots]
+
+    fn insert(mut self, session: Session) -> None {
+        let row = sessions.insert(session)
+        by_id.insert(key = session.id, row = row)
+
+        return None
+    }
+}
+```
+
+Generic methods are allowed, but they are still class methods and still require
+an explicit receiver:
+
+```wrela
+class ValueOps {
+    fn identity<T: Move>(read self, value: T) -> T {
+        return value
+    }
+
+    fn copy<T: Copy>(read self, value: T) -> T {
+        return value
+    }
+}
+```
+
+Because Wrela compiles from root images downward, every generic instantiation is
+known before final code generation. The compiler can monomorphize or otherwise
+specialize those instances and report their code and data footprint. Sharing
+machine code between compatible instantiations can be a later optimization, but
+the source semantics should not depend on it.
+
+Tables should initially require `T: Data`, not arbitrary classes. This
+preserves the columnar storage and vectorization model. Classes can own tables
+and indexes, but a table should not become a bag of hidden object identities.
 
 ## AArch64-Only Backend
 
@@ -322,7 +434,7 @@ branching is expressed with exhaustive `match`.
 
 ```wrela
 class ExecutorChooser {
-    fn choose(ready: Bool, fast: Executor, idle: Executor) -> Executor {
+    fn choose(read self, ready: Bool, fast: Executor, idle: Executor) -> Executor {
         match ready {
             true => return fast
             false => return idle
@@ -335,7 +447,7 @@ Closed sums must handle every case:
 
 ```wrela
 class DeviceStatusHandler {
-    fn handle(status: DeviceStatus) -> Result[None, DeviceError] {
+    fn handle(read self, status: DeviceStatus) -> Result[None, DeviceError] {
         match status {
             DeviceStatus.Ready => return Ok(None)
             DeviceStatus.Busy => return Err(DeviceError.Retry)
@@ -350,7 +462,7 @@ not statically enumerable:
 
 ```wrela
 class DeviceStatusDecoder {
-    fn decode(raw: U32) -> DeviceStatus {
+    fn decode(read self, raw: U32) -> DeviceStatus {
         match raw {
             0 => return DeviceStatus.Ready
             1 => return DeviceStatus.Busy
@@ -377,11 +489,11 @@ returns.
 
 ```wrela
 class Math {
-    fn add(a: U32, b: U32) -> U32 {
+    fn add(read self, a: U32, b: U32) -> U32 {
         return a + b
     }
 
-    fn mark_seen(flags: Flags) -> Flags {
+    fn mark_seen(read self, flags: Flags) -> Flags {
         return flags.set(Flag.Seen)
     }
 }
@@ -390,10 +502,10 @@ class Math {
 Methods that produce no useful value return `None` explicitly:
 
 ```wrela
-class BannerWriter {
-    console: Console
+class BannerWriter<C: Console> {
+    console: C
 
-    fn write() -> None {
+    fn write(mut self) -> None {
         console.write("ready")
 
         return None
@@ -439,10 +551,10 @@ error LoadError {
 Callers handle errors with exhaustive `match` when policy differs by case:
 
 ```wrela
-class RequiredBlockReader {
-    disk: BlockDevice
+class RequiredBlockReader<D: BlockDevice> {
+    disk: D
 
-    fn read(index: U64, out: Buffer[U8]) -> Result[None, LoadError] {
+    fn read(mut self, index: U64, out: Buffer[U8]) -> Result[None, LoadError] {
         match disk.read(index, out) {
             Ok(_) => return Ok(None)
             Err(DiskError.Timeout) => return Err(LoadError.Disk(DiskError.Timeout))
@@ -464,10 +576,14 @@ When the source error type matches the enclosing method's error type, plain
 `try` is valid:
 
 ```wrela
-class DiskFlusher {
-    disk: BlockDevice
+interface DiskFlush {
+    fn flush(mut self) -> Result[None, DiskError]
+}
 
-    fn flush_all() -> Result[None, DiskError] {
+class DiskFlusher<D: DiskFlush> {
+    disk: D
+
+    fn flush_all(mut self) -> Result[None, DiskError] {
         try disk.flush()
 
         return Ok(None)
@@ -478,11 +594,11 @@ class DiskFlusher {
 The inline mapped form uses `else return` so the control flow is visible:
 
 ```wrela
-class HeaderLoader {
-    disk: BlockDevice
+class HeaderLoader<D: BlockDevice> {
+    disk: D
     parser: HeaderParser
 
-    fn load(out: Buffer[U8]) -> Result[Header, LoadError] {
+    fn load(mut self, out: Buffer[U8]) -> Result[Header, LoadError] {
         try disk.read(0, out) else return LoadError.Disk
 
         let header = try parser.parse(out) else return LoadError.Parse
@@ -510,7 +626,7 @@ The expanded form binds the source error and requires the block to diverge with
 class CheckedHeaderLoader {
     parser: HeaderParser
 
-    fn load(bytes: Buffer[U8]) -> Result[Header, LoadError] {
+    fn load(read self, bytes: Buffer[U8]) -> Result[Header, LoadError] {
         let header = try parser.parse(bytes) else err {
             match err {
                 HeaderError.BadMagic => return Err(LoadError.BadMagic)
@@ -553,7 +669,7 @@ Example:
 class TrustedHeaderParser {
     parser: HeaderParser
 
-    fn parse(bytes: Buffer[U8]) -> Header {
+    fn parse(read self, bytes: Buffer[U8]) -> Header {
         match parser.parse(bytes) {
             Ok(header) => return header
             Err(HeaderError.BadMagic) => trap("trusted header parser failed: bad magic")
@@ -575,7 +691,7 @@ Fault policy is root-owned authority:
 
 ```wrela
 interface FaultPolicy {
-    fn fatal(reason: TrapReport) -> Never
+    fn fatal(mut self, reason: TrapReport) -> Never
 }
 
 image QemuTests {
@@ -664,7 +780,7 @@ Frame memory is bounded scratch:
 class PacketWorker {
     memory: ExecutorArena
 
-    fn tick(input: PacketBatch) -> None {
+    fn tick(mut self, input: PacketBatch) -> None {
         with memory.frame(bytes = 64 * KiB, align = 64) as frame {
             let decoded = frame.place(DecodedBatch(input = input))
             let scratch = frame.reserve(bytes = 4096, align = 64)
@@ -703,7 +819,7 @@ class SessionStore {
     sessions: Table[Session, 4096]
     by_id: Index[SessionId, 8192]
 
-    fn insert(session: Session) -> None {
+    fn insert(mut self, session: Session) -> None {
         let row = sessions.insert(session)
         by_id.insert(key = session.id, row = row)
 
@@ -753,7 +869,7 @@ class SessionStore {
     sessions: Table[Session, 4096]
     by_id: Index[SessionId, 8192]
 
-    fn mark_active(id: SessionId, now: Tick) -> None {
+    fn mark_active(mut self, id: SessionId, now: Tick) -> None {
         let row = by_id.require(id)
 
         sessions.state[row] = SessionState.Active
@@ -873,7 +989,7 @@ Example:
 
 ```wrela
 class TimerTableOps {
-    fn mark_ready(timers: Table[TimerEntry], now: Tick) -> None {
+    fn mark_ready(read self, timers: Table[TimerEntry], now: Tick) -> None {
         let expired = timers.deadline <= now
 
         timers.state[expired] = TimerState.Ready
@@ -893,7 +1009,7 @@ lanes matter.
 
 ```wrela
 class ByteVectorKernels {
-    fn xor_block(a: Vec[16, U8], b: Vec[16, U8]) -> Vec[16, U8] {
+    fn xor_block(read self, a: Vec[16, U8], b: Vec[16, U8]) -> Vec[16, U8] {
         return a ^ b
     }
 }
@@ -924,7 +1040,7 @@ Example shape:
 use arch.aarch64.neon
 
 class ChecksumKernels {
-    fn checksum_step(input: Vec[16, U8]) -> Vec[8, U16]
+    fn checksum_step(read self, input: Vec[16, U8]) -> Vec[8, U16]
         requires cpu.adv_simd
     {
         return neon.uaddlp(input)
@@ -996,15 +1112,15 @@ after construction: methods can mutate the state behind owned fields through
 
 ```wrela
 interface BlockDevice {
-    fn read(index: U64, out: Buffer[U8]) -> Result[None, DiskError]
-    fn write(index: U64, data: Buffer[U8]) -> Result[None, DiskError]
+    fn read(mut self, index: U64, out: Buffer[U8]) -> Result[None, DiskError]
+    fn write(mut self, index: U64, data: Buffer[U8]) -> Result[None, DiskError]
 }
 
 class VirtioBlockDevice implements BlockDevice {
     registers: unique VirtioBlockRegisters
     queue: unique VirtioQueue
 
-    fn read(index: U64, out: Buffer[U8]) -> Result[None, DiskError] {
+    fn read(mut self, index: U64, out: Buffer[U8]) -> Result[None, DiskError] {
         return queue.submit_read(index = index, out = out)
     }
 }
@@ -1026,7 +1142,7 @@ Possible diagnostic modes:
 
 ```wrela
 class PacketClassifier {
-    fn classify(packets: Table[Packet]) -> None
+    fn classify(read self, packets: Table[Packet]) -> None
         vectorize diagnose
     {
         let valid = packets.flags.has(PacketFlag.Valid)
@@ -1035,7 +1151,7 @@ class PacketClassifier {
         return None
     }
 
-    fn classify_fast(packets: Table[Packet]) -> None
+    fn classify_fast(read self, packets: Table[Packet]) -> None
         vectorize require
     {
         let large = packets.len > 1200
@@ -1072,6 +1188,8 @@ This design does not require:
 - Ambient panic or process-exit behavior.
 - Top-level free functions.
 - Runtime vtables or implicit dynamic dispatch for interfaces.
+- Runtime generic dictionaries or hidden type metadata for generics.
+- Interface-typed fields as implicit existential objects.
 - Implicit copying of class values.
 - Mutable class-field rebinding after construction.
 - Long-lived `mut` dependency fields in the initial language.
@@ -1086,6 +1204,10 @@ The first language nucleus should include:
 
 - `module` and explicit `use` imports.
 - static `interface` contracts with no implicit runtime vtables.
+- compile-time generics over types and constants.
+- capitalized generic constraints such as `Data`, `Copy`, `BlockDevice`, and
+  `Const[U32]`.
+- interface names usable as generic constraints, not hidden runtime field types.
 - `class` for capability-carrying objects and adapters.
 - class methods as the only ordinary callable function form.
 - explicit receiver modes: `read self`, `mut self`, and `own self`.
@@ -1126,6 +1248,10 @@ The next design pass should settle:
 - Exact lifetime notation and diagnostics for `read` fields and borrowed class
   dependencies.
 - Whether any class field mode beyond owned and `read` should exist after v1.
+- Exact built-in generic constraint names beyond the initial capitalized set.
+- Whether generic type arguments are always inferred from constructors or can be
+  explicitly supplied at construction sites.
+- Whether later backends share code between compatible generic instantiations.
 - Exact arena type names for root, executor, driver, DMA, table, cache, and
   scratch memory.
 - Exact trap report payload for OOM and capacity violations.

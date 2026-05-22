@@ -42,13 +42,13 @@ The major profiles are:
   hardware-backed capabilities only through platform authority discovered during
   boot.
 
-The same test suite class can run in either profile when both roots can provide
-implementations of the interfaces it requires.
+The same generic test suite class can run in either profile when both roots can
+provide concrete capability values satisfying the static interfaces it requires.
 
 ## Capability Interfaces
 
-Tests should depend on behavior-shaped interfaces, not operating-system-shaped
-globals. Examples include:
+Tests should depend on behavior-shaped static interfaces, not
+operating-system-shaped globals. Examples include:
 
 - `Console`
 - `Clock`
@@ -61,6 +61,10 @@ globals. Examples include:
 Hosted roots can satisfy these with macOS-backed adapters. QEMU roots can
 satisfy them with UARTs, architectural timers, claimed physical memory, virtio
 devices, or other boot-visible hardware capabilities.
+
+An interface name is used as a generic constraint, not as a hidden runtime
+object. A suite that needs a console is shaped as `RingBufferTests<C: Console>`
+with a field `console: C`.
 
 Broad ambient interfaces such as a full `Filesystem` should be avoided unless
 the test genuinely needs that authority. Prefer narrower capabilities such as a
@@ -97,7 +101,8 @@ host image HostTests {
 ```
 
 The host root is the only place where `MacOSHost` appears. Normal test suites
-receive narrower capabilities such as `Console`, `Clock`, or `Memory`.
+receive narrower concrete capabilities constrained by interfaces such as
+`Console`, `Clock`, or `Memory`.
 
 ## QEMU Root Shape
 
@@ -140,8 +145,8 @@ registration method such as `runner.add`.
 ```wrela
 module tests.ring_buffer
 
-pub class RingBufferTests {
-    console: Console
+pub class RingBufferTests<C: Console> {
+    console: C
 
     test "ring buffer correctly wraps" {
         let buffer = RingBuffer[U8](capacity = 4)
@@ -174,12 +179,12 @@ expressions are evaluated fresh for that test and can use the suite fields.
 ```wrela
 module tests.storage
 
-class InMemoryBlockDevice implements BlockDevice {
-    memory: Memory
+class InMemoryBlockDevice<M: Memory> implements BlockDevice {
+    memory: M
     blocks: UInt
     storage: BlockArray
 
-    constructor(memory: Memory, blocks: UInt) {
+    constructor(memory: M, blocks: UInt) {
         return Self(
             memory = memory,
             blocks = blocks,
@@ -187,14 +192,14 @@ class InMemoryBlockDevice implements BlockDevice {
         )
     }
 
-    fn read(index: UInt) -> Result[Block, DiskError] {
+    fn read(mut self, index: UInt) -> Result[Block, DiskError] {
         match index >= blocks {
             true => return Err(DiskError.OutOfRange)
             false => return Ok(storage[index])
         }
     }
 
-    fn write(index: UInt, block: Block) -> Result[None, DiskError] {
+    fn write(mut self, index: UInt, block: Block) -> Result[None, DiskError] {
         match index >= blocks {
             true => return Err(DiskError.OutOfRange)
             false => {
@@ -205,12 +210,16 @@ class InMemoryBlockDevice implements BlockDevice {
     }
 }
 
-class FaultInjectingBlockDevice implements BlockDevice {
-    inner: BlockDevice
+class FaultInjectingBlockDevice<D: BlockDevice> implements BlockDevice {
+    inner: D
     fail_after_writes: UInt
     writes: UInt = 0
 
-    fn write(index: UInt, block: Block) -> Result[None, DiskError] {
+    fn read(mut self, index: UInt) -> Result[Block, DiskError] {
+        return inner.read(index = index)
+    }
+
+    fn write(mut self, index: UInt, block: Block) -> Result[None, DiskError] {
         match writes >= fail_after_writes {
             true => return Err(DiskError.InjectedFailure)
             false => {
@@ -221,9 +230,9 @@ class FaultInjectingBlockDevice implements BlockDevice {
     }
 }
 
-pub class StorageTests {
-    console: Console
-    memory: Memory
+pub class StorageTests<C: Console, M: Memory> {
+    console: C
+    memory: M
 
     test "writes and reads one block"
         with disk = InMemoryBlockDevice(memory = memory, blocks = 1024)
@@ -258,8 +267,13 @@ not discover source files, compile tests, or grant authority.
 
 The runner receives:
 
-- Its own reporting capabilities, such as `Console` and `Clock`.
+- Its own concrete reporting capabilities constrained by interfaces such as
+  `Console` and `Clock`.
 - A list of already-constructed suite values.
+
+`TestRunner` should follow the same static-interface rule as suites. A runner
+with reporting dependencies is generic over concrete capability types rather
+than storing interface-typed fields.
 
 The runner performs:
 
@@ -327,19 +341,22 @@ This design does not include:
 - A hidden hosted standard library.
 - Ambient filesystem, stdout, clock, allocator, or process access.
 - A requirement that all tests be runnable under every profile.
+- Interface-typed suite fields or hidden runtime capability objects.
 
 ## Open Language Questions
 
-The following language primitives still need to be designed:
+The following language primitives still need more detail:
 
-- Exact syntax and semantics for `interface`.
 - Exact syntax and semantics for `class` fields and constructors.
+- Exact compatibility rules between interface receiver modes and implementing
+  methods.
 - Whether `test` declarations are allowed only in classes or also modules.
 - How `with` fixture lifetimes interact with ownership and borrowing.
 - How assertions are represented in the type system.
 - How test failures differ from traps and fault-policy reports.
 - How runner result reporting is modeled without hidden process exit behavior.
-- How arrays of heterogeneous test suites are represented.
+- How heterogeneous lists of generic test suite instances are represented
+  without runtime interface objects.
 
 These questions should be handled while designing the language nucleus. The
 initial language/data-layout direction is captured in
