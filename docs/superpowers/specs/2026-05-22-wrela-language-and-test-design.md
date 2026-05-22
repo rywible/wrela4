@@ -19,6 +19,8 @@ This design captures the initial shape of the language nucleus:
 - Constructors initialize every class field exactly once.
 - Class fields are immutable after construction.
 - Class values move by default; shared dependencies must be `read`.
+- `unique class` means one instantiation across the image call graph, not
+  merely a move-only value.
 - Borrowing uses explicit `read`, `mut`, and `own` access authority.
 - Generics are compile-time only and use capitalized constraints.
 - Interface names are static constraints, not hidden runtime field types.
@@ -106,8 +108,8 @@ The core categories are:
   boundaries.
 - `class`: behavior plus owned dependencies. A class must define at least one
   method or test declaration.
-- `unique class`: authority-bearing behavior and state with stricter
-  construction and graph checks.
+- `unique class`: graph-root authority whose concrete specialization may be
+  instantiated at most once in an image call graph.
 - `interface`: static method contract.
 
 If a type has fields but no methods or test declarations, it should be `data`,
@@ -116,6 +118,13 @@ not `class`.
 Class values move by default. They are not implicitly copied. If two owners need
 the same behavior, the image or constructor code must create two instances and
 move one into each owner.
+
+An ordinary class instance can still be a serious authority-bearing value. The
+difference is that ordinary class instances are unique by ownership: each
+instance has one owner unless it is borrowed as `read`, but the class may have
+many explicit instances. A `unique class` is unique by type and graph: a
+reachable image graph can contain at most one instance of that concrete
+declaration or specialization.
 
 ```wrela
 class HeaderParser {
@@ -206,7 +215,7 @@ state behind an owned field when it has `mut self`, but it may not reassign the
 field itself.
 
 ```wrela
-unique class SessionStore {
+class SessionStore {
     sessions: Table[Session, 4096]
     by_id: Index[SessionId, 8192]
 
@@ -231,10 +240,10 @@ Methods explicitly declare their receiver mode:
 
 Long-lived class fields may be owned or `read`. Initial Wrela should not allow
 long-lived `mut` fields; shared mutable dependencies should be modeled through a
-unique owner/coordinator or an explicit synchronization capability.
+single owned coordinator instance or an explicit synchronization capability.
 
 ```wrela
-unique class Coordinator {
+class Coordinator {
     store: SessionStore
 
     fn mark(mut self, id: SessionId, now: Tick) -> None {
@@ -360,26 +369,121 @@ Conversion rules:
 
 ## Unique Classes
 
-`unique class` is for authority-bearing owners and identity-sensitive state.
+`unique class` is for graph-rooted authority. It means at most one reachable
+instance of the concrete unique class specialization exists in the image call
+graph.
 
 Examples include:
 
 - host and platform roots
-- hardware authorities
-- memory arenas
-- executor state
-- drivers and device paths
-- queues, topics, caches, tables, and indexes that own durable storage
-- DMA and MMIO capabilities
+- physical memory and address-space roots
+- interrupt-controller roots
+- boot-discovered hardware-device roots
+- privileged driver roots
+- root MMIO, DMA, page-table, and CPU-feature authorities
 
-Unique values move by default and cannot be copied. They can be borrowed with
-`read` or `mut` only when the capability type permits that access. Most root
-authorities should be narrowed into smaller capabilities before being shared.
+`unique class` is not the general spelling for "this value has identity" or
+"this value is move-only." Ordinary class instances already move by default and
+can represent owned executor state, queues, topics, caches, tables, indexes,
+and driver paths. Use `unique class` only when the image graph should prove
+there is a single authority of that kind.
+
+For generic unique classes, the rule applies to each concrete specialization.
+Const generics are not a way to create many instances of the same root
+authority shape. If a unique authority needs to expose multiple resources, it
+should mint ordinary owned class instances that represent narrowed paths.
+
+Unique class instances move by default and cannot be copied. They can be
+borrowed with `read` or `mut` only when the capability type permits that
+access. Most root authorities should be narrowed into smaller owned path values
+before being moved into ordinary services or executors.
 
 Unique classes also participate in image graph checks: roots cannot be forged,
-memory cannot be assigned to the wrong executor, device paths cannot be passed
-to multiple owners, and authority-bearing values cannot be hidden inside
-copyable data.
+physical memory cannot be claimed twice, the same core cannot receive two
+executor instances, the same interrupt line cannot be bound twice, and
+authority-bearing values cannot be hidden inside copyable data.
+
+## Authority Paths, Drivers, And Core Executors
+
+A unique authority can mint multiple ordinary owned path instances. Those paths
+are not `unique class` values. They are regular class values with linear
+ownership, created by a unique authority that can prove the underlying resource
+has been split safely.
+
+This is the model for drivers:
+
+```wrela
+unique class UartDriver {
+    registers: UartRegisters
+    interrupts: InterruptRoot
+
+    fn tx_path(mut self, queue: UartTxQueue) -> UartTxPath {
+        return UartTxPath(queue = queue)
+    }
+
+    fn rx_path(mut self, queue: UartRxQueue) -> UartRxPath {
+        return UartRxPath(queue = queue)
+    }
+}
+
+class UartTxPath {
+    queue: UartTxQueue
+
+    fn write(mut self, bytes: Bytes) -> Result[None, UartError] {
+        return queue.push(bytes = bytes)
+    }
+}
+```
+
+`UartDriver` is globally unique because it owns the root device authority.
+`UartTxPath` and `UartRxPath` are ordinary owned classes. A root or driver can
+create multiple path values when the unique driver proves that each path owns a
+disjoint queue, channel, interrupt binding, or permission subset.
+
+Core executors follow the same rule. `CoreExecutor` is a regular class, not a
+`unique class`. To run on multiple cores, the root claims one core path per
+hardware core, creates one executor instance per core, and moves each executor
+into its corresponding core path.
+
+```wrela
+class CoreExecutor {
+    memory: ExecutorArena
+    queue: RunQueue
+
+    fn run(mut self) -> Never {
+        loop {
+            let task = queue.next()
+            task.poll()
+        }
+    }
+}
+
+image MultiCore target QemuVirtPlatform {
+    phase boot(platform: unique QemuVirtPlatform) {
+        let core0 = platform.cores.claim(id = 0)
+        let core1 = platform.cores.claim(id = 1)
+
+        let exec0 = CoreExecutor(
+            memory = platform.memory.claim_executor_arena(name = "core0"),
+            queue = RunQueue(capacity = 1024),
+        )
+        let exec1 = CoreExecutor(
+            memory = platform.memory.claim_executor_arena(name = "core1"),
+            queue = RunQueue(capacity = 1024),
+        )
+
+        core0.enter(exec0)
+        core1.enter(exec1)
+
+        return None
+    }
+}
+```
+
+After `exec0` is moved into `core0.enter`, it cannot be reused. The uniqueness
+comes from ownership of the instance and from the platform's proof that
+`core0` names a distinct hardware core, not from making `CoreExecutor` a unique
+class.
 
 ## Authority-Gated Machine Effects
 
@@ -388,8 +492,11 @@ developer-written permission annotations. A method cannot opt into IO, raw
 memory, pointer arithmetic, assembly, MMIO, DMA, blocking, entropy, or time by
 writing a `requires` effect clause.
 
-Instead, those effects are available only through `unique class` capabilities
-granted by roots or by other unique authorities.
+Instead, those effects are available only inside methods of `unique class`
+capabilities granted by roots or by other unique authorities. Ordinary path
+classes can expose safe operations over narrowed authority, but they do not gain
+raw pointer arithmetic, assembly, MMIO, DMA, or interrupt control merely by
+carrying a token minted by a unique authority.
 
 ```wrela
 unique class PageTableBuilder {
@@ -501,7 +608,7 @@ Constraints use capitalized names. Built-in constraints should start small:
 - `Move`: values can be moved and consumed.
 - `Data`: logical record values suitable for table storage.
 - `Stored`: values with compiler-known storage requirements.
-- `Unique`: authority-bearing values with graph checks.
+- `Unique`: globally single-instanced concrete `unique class` specializations.
 - Interface names such as `BlockDevice`, `Clock`, or `Console`.
 - `Const[T]`: compile-time constant values of scalar type `T`.
 
@@ -532,7 +639,7 @@ concrete values, and the compiler specializes the used instance.
 Capacity-shaped types use const generics:
 
 ```wrela
-unique class SessionStore<Rows: Const[U32], IndexSlots: Const[U32]> {
+class SessionStore<Rows: Const[U32], IndexSlots: Const[U32]> {
     sessions: Table[Session, Rows]
     by_id: Index[SessionId, IndexSlots]
 
@@ -1991,6 +2098,65 @@ data TestSummary {
 
 Hosted process-exit mapping belongs in the hosted root, not inside suites.
 
+### Parallel Test Runs
+
+Test execution can be parallelized without changing the authority model. The
+serial runner remains the baseline. Parallel execution is available only when
+the root gives the runner explicit executor lanes.
+
+A hosted root can derive host-backed test executor lanes from `MacOSHost`. A
+QEMU root can claim core paths, construct one ordinary `CoreExecutor` instance
+per core, and give the runner a lane set backed by those executors. In both
+profiles, the runner receives concrete values; it does not discover a thread
+pool, spawn ambient workers, or assume that all cores are available.
+
+```wrela
+host image HostTests {
+    phase run(host: unique MacOSHost) {
+        let console = host.stdout()
+        let clock = host.monotonic_clock()
+        let lanes = host.test_executors(count = 8)
+
+        let runner = TestRunner(
+            console = console,
+            clock = clock,
+        )
+
+        runner.run_parallel(
+            suites = [
+                RingBufferTests(console = console),
+                StorageTests(console = console, memory = host.test_arena(bytes = 64 * MiB)),
+            ],
+            lanes = lanes,
+        )
+
+        return None
+    }
+}
+```
+
+Parallel runner rules:
+
+- `run(suites)` is deterministic serial execution.
+- `run_parallel(suites, lanes)` can run tests concurrently only across the
+  explicitly supplied lane values.
+- A lane is an ordinary owned class instance or lane-set class, usually minted
+  by a unique host/platform authority or by a claimed core path.
+- Each test still receives fresh `with` fixtures.
+- Tests within the same suite instance are serialized if they need mutable
+  access to suite state.
+- Test-level parallelism inside one suite is allowed only when the test can be
+  typechecked with read-only suite access and fresh fixtures, or when the root
+  constructs shard-local suite instances.
+- Shared capabilities must be `read` or must be explicit synchronization or
+  serialization capabilities.
+- Result reporting should be stable by suite and test declaration order, even
+  when execution completes out of order.
+
+This lets the same suite model scale from local unit tests to multicore QEMU
+tests while keeping every worker, core, queue, clock, memory arena, and output
+path visible in the root graph.
+
 ### Test Typechecking And Dependency Graph
 
 The compiler enforces the test model with these rules:
@@ -2000,6 +2166,8 @@ The compiler enforces the test model with these rules:
 - A class with at least one `test` declaration is a test suite.
 - `TestRunner.run(suites)` accepts only values whose classes contain test
   metadata.
+- `TestRunner.run_parallel(suites, lanes)` also requires explicitly supplied
+  executor lanes and rejects hidden hosted worker construction.
 - A test body can access suite fields and its own `with` fixtures.
 - A `with` fixture expression can use suite fields and earlier fixtures from the
   same test declaration.
@@ -2045,8 +2213,8 @@ interface BlockDevice {
 }
 
 class VirtioBlockDevice implements BlockDevice {
-    registers: unique VirtioBlockRegisters
-    queue: unique VirtioQueue
+    registers: VirtioBlockRegisterPath
+    queue: VirtioQueuePath
 
     fn read(mut self, index: U64, out: Buffer[U8]) -> Result[None, DiskError] {
         return queue.submit_read(index = index, out = out)
@@ -2122,6 +2290,9 @@ This design does not require:
 - Runtime generic dictionaries or hidden type metadata for generics.
 - Interface-typed fields as implicit existential objects.
 - Interface-typed suite fields or hidden runtime capability objects.
+- Using `unique class` as the general marker for move-only state.
+- Multiple instances of the same concrete `unique class` specialization in one
+  image call graph.
 - Developer-authored effect or permission clauses for privileged operations.
 - Pointer arithmetic or raw memory dereference outside unique authority.
 - Assembly functions outside unique authority.
@@ -2159,7 +2330,10 @@ The first language nucleus should include:
 - immutable class field bindings after construction.
 - class values that move by default, with shared dependencies declared as
   `read`.
-- `unique class` for authority-bearing owners with graph checks.
+- `unique class` for graph-root authorities with one instantiation per concrete
+  specialization in the image call graph.
+- ordinary owned classes for executor instances, driver paths, queues, caches,
+  indexes, and other move-only state that may have many explicit instances.
 - authority-gated machine effects through unique capabilities.
 - fixed-size primitive scalar types with explicit wrapping, saturating, and
   checked arithmetic.
@@ -2207,10 +2381,13 @@ The next design pass should still settle:
 - Whether `test` declarations are allowed only in classes or also modules.
 - Exact diagnostic payloads for `assert value` and `assert same` failures.
 - Exact hosted process exit mapping for `TestSummary`.
+- Exact parallel test lane API and deterministic timeout/reporting behavior.
 - How heterogeneous lists of generic test suite instances are represented
   without runtime interface objects.
 - Exact arena type names for root, executor, driver, DMA, table, cache, and
   scratch memory.
+- Exact platform library shapes for core paths, interrupt bindings, executor
+  lane sets, and driver path minting.
 - Exact `TrapCode` cases for OOM, capacity violations, bounds failures, and
   arithmetic traps.
 - Whether `layout mmio` uses a distinct `Mmio[T]` field type or an enclosing
