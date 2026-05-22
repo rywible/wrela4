@@ -12,8 +12,10 @@ into assembly or compiler folklore.
 This design captures the initial shape of the language nucleus:
 
 - Scalar control and authority code remains explicit and readable.
+- Modules do not allow top-level `fn` declarations.
+- Callable functions are methods under classes.
 - Scalar branching uses exhaustive `match`, not a generic `if`.
-- Normal functions and phases use explicit `return`.
+- Methods and phase blocks use explicit `return`.
 - Recoverable errors are typed values, not exceptions.
 - Bulk logical data is columnar by default.
 - Tables and masks provide the primary vector-friendly programming model.
@@ -32,6 +34,24 @@ The explicit test-suite model depends on these language primitives:
 - Explicit root images that import and construct suite classes.
 
 This document focuses on the broader language shape underneath that test model.
+
+## No Top-Level Functions
+
+Wrela modules do not allow top-level `fn` declarations. A module can declare
+types, interfaces, classes, errors, layouts, imports, and image roots, but
+ordinary callable behavior lives under classes.
+
+This keeps executable behavior attached to an explicit owner:
+
+- Capability behavior lives on capability classes.
+- Adapter behavior lives on adapter classes.
+- Data-plane kernels live on kernel or service classes.
+- Test behavior lives inside test suite classes.
+- Interfaces declare method requirements, but do not define free functions.
+
+Image and host-image roots may contain phase or entry declarations. Those are
+root composition hooks, not importable module-level functions. They establish
+authority and construct classes that do the ordinary work.
 
 ## AArch64-Only Backend
 
@@ -101,10 +121,12 @@ branching is expressed with exhaustive `match`.
 `Bool` is a closed two-case type:
 
 ```wrela
-fn choose_executor(ready: Bool, fast: Executor, idle: Executor) -> Executor {
-    match ready {
-        true => return fast
-        false => return idle
+class ExecutorChooser {
+    fn choose(ready: Bool, fast: Executor, idle: Executor) -> Executor {
+        match ready {
+            true => return fast
+            false => return idle
+        }
     }
 }
 ```
@@ -112,11 +134,13 @@ fn choose_executor(ready: Bool, fast: Executor, idle: Executor) -> Executor {
 Closed sums must handle every case:
 
 ```wrela
-fn handle_status(status: DeviceStatus) -> Result[None, DeviceError] {
-    match status {
-        DeviceStatus.Ready => return Ok(None)
-        DeviceStatus.Busy => return Err(DeviceError.Retry)
-        DeviceStatus.Gone => return Err(DeviceError.DeviceGone)
+class DeviceStatusHandler {
+    fn handle(status: DeviceStatus) -> Result[None, DeviceError] {
+        match status {
+            DeviceStatus.Ready => return Ok(None)
+            DeviceStatus.Busy => return Err(DeviceError.Retry)
+            DeviceStatus.Gone => return Err(DeviceError.DeviceGone)
+        }
     }
 }
 ```
@@ -125,12 +149,14 @@ Open numeric domains can use ranges and a fallback arm when the input space is
 not statically enumerable:
 
 ```wrela
-fn decode_status(raw: U32) -> DeviceStatus {
-    match raw {
-        0 => return DeviceStatus.Ready
-        1 => return DeviceStatus.Busy
-        2..=15 => return DeviceStatus.Recoverable(raw)
-        _ => return DeviceStatus.Unknown(raw)
+class DeviceStatusDecoder {
+    fn decode(raw: U32) -> DeviceStatus {
+        match raw {
+            0 => return DeviceStatus.Ready
+            1 => return DeviceStatus.Busy
+            2..=15 => return DeviceStatus.Recoverable(raw)
+            _ => return DeviceStatus.Unknown(raw)
+        }
     }
 }
 ```
@@ -145,27 +171,33 @@ in the table/mask model.
 
 ## Return
 
-`return` is a keyword and should be used explicitly in functions, phases, and
+`return` is a keyword and should be used explicitly in methods, phases, and
 expanded error handlers. Wrela should not rely on implicit final-expression
 returns.
 
 ```wrela
-fn add(a: U32, b: U32) -> U32 {
-    return a + b
-}
+class Math {
+    fn add(a: U32, b: U32) -> U32 {
+        return a + b
+    }
 
-fn mark_seen(flags: Flags) -> Flags {
-    return flags.set(Flag.Seen)
+    fn mark_seen(flags: Flags) -> Flags {
+        return flags.set(Flag.Seen)
+    }
 }
 ```
 
-Functions that produce no useful value return `None` explicitly:
+Methods that produce no useful value return `None` explicitly:
 
 ```wrela
-fn write_banner(console: Console) -> None {
-    console.write("ready")
+class BannerWriter {
+    console: Console
 
-    return None
+    fn write() -> None {
+        console.write("ready")
+
+        return None
+    }
 }
 ```
 
@@ -207,12 +239,16 @@ error LoadError {
 Callers handle errors with exhaustive `match` when policy differs by case:
 
 ```wrela
-fn read_required(disk: BlockDevice, index: U64, out: Buffer[U8]) -> Result[None, LoadError] {
-    match disk.read(index, out) {
-        Ok(_) => return Ok(None)
-        Err(DiskError.Timeout) => return Err(LoadError.Disk(DiskError.Timeout))
-        Err(DiskError.BadBlock(block)) => return Err(LoadError.Disk(DiskError.BadBlock(block)))
-        Err(DiskError.DeviceGone) => return Err(LoadError.Disk(DiskError.DeviceGone))
+class RequiredBlockReader {
+    disk: BlockDevice
+
+    fn read(index: U64, out: Buffer[U8]) -> Result[None, LoadError] {
+        match disk.read(index, out) {
+            Ok(_) => return Ok(None)
+            Err(DiskError.Timeout) => return Err(LoadError.Disk(DiskError.Timeout))
+            Err(DiskError.BadBlock(block)) => return Err(LoadError.Disk(DiskError.BadBlock(block)))
+            Err(DiskError.DeviceGone) => return Err(LoadError.Disk(DiskError.DeviceGone))
+        }
     }
 }
 ```
@@ -224,26 +260,34 @@ Adding a new `DiskError` case should force relevant matches to update.
 `try` is explicit early-return sugar over `Result`. It is not an exception and
 does not unwind.
 
-When the source error type matches the enclosing function's error type, plain
+When the source error type matches the enclosing method's error type, plain
 `try` is valid:
 
 ```wrela
-fn flush_all(disk: BlockDevice) -> Result[None, DiskError] {
-    try disk.flush()
+class DiskFlusher {
+    disk: BlockDevice
 
-    return Ok(None)
+    fn flush_all() -> Result[None, DiskError] {
+        try disk.flush()
+
+        return Ok(None)
+    }
 }
 ```
 
 The inline mapped form uses `else return` so the control flow is visible:
 
 ```wrela
-fn load_header(disk: BlockDevice, out: Buffer[U8]) -> Result[Header, LoadError] {
-    try disk.read(0, out) else return LoadError.Disk
+class HeaderLoader {
+    disk: BlockDevice
 
-    let header = try parse_header(out) else return LoadError.Parse
+    fn load(out: Buffer[U8]) -> Result[Header, LoadError] {
+        try disk.read(0, out) else return LoadError.Disk
 
-    return Ok(header)
+        let header = try HeaderParser().parse(out) else return LoadError.Parse
+
+        return Ok(header)
+    }
 }
 ```
 
@@ -251,7 +295,7 @@ The inline mapped form means:
 
 ```text
 on Ok(value), evaluate to value
-on Err(err), return Err(Constructor(err)) from the current function
+on Err(err), return Err(Constructor(err)) from the current method
 ```
 
 The constructor in `else return Constructor` must accept the source error. If a
@@ -262,18 +306,22 @@ The expanded form binds the source error and requires the block to diverge with
 `return`, `trap`, or another `Never`-returning expression:
 
 ```wrela
-fn load_header_checked(bytes: Buffer[U8]) -> Result[Header, LoadError] {
-    let header = try parse_header(bytes) else err {
-        match err {
-            HeaderError.BadMagic => return Err(LoadError.BadMagic)
-            HeaderError.UnsupportedVersion(version) => {
-                return Err(LoadError.UnsupportedVersion(version))
-            }
-            HeaderError.Truncated => return Err(LoadError.Truncated)
-        }
-    }
+class CheckedHeaderLoader {
+    parser: HeaderParser
 
-    return Ok(header)
+    fn load(bytes: Buffer[U8]) -> Result[Header, LoadError] {
+        let header = try parser.parse(bytes) else err {
+            match err {
+                HeaderError.BadMagic => return Err(LoadError.BadMagic)
+                HeaderError.UnsupportedVersion(version) => {
+                    return Err(LoadError.UnsupportedVersion(version))
+                }
+                HeaderError.Truncated => return Err(LoadError.Truncated)
+            }
+        }
+
+        return Ok(header)
+    }
 }
 ```
 
@@ -301,12 +349,16 @@ Use traps for:
 Example:
 
 ```wrela
-fn trusted_header(bytes: Buffer[U8]) -> Header {
-    match parse_header(bytes) {
-        Ok(header) => return header
-        Err(HeaderError.BadMagic) => trap("trusted header parser failed: bad magic")
-        Err(HeaderError.UnsupportedVersion(_)) => trap("trusted header parser failed: version")
-        Err(HeaderError.Truncated) => trap("trusted header parser failed: truncated")
+class TrustedHeaderParser {
+    parser: HeaderParser
+
+    fn parse(bytes: Buffer[U8]) -> Header {
+        match parser.parse(bytes) {
+            Ok(header) => return header
+            Err(HeaderError.BadMagic) => trap("trusted header parser failed: bad magic")
+            Err(HeaderError.UnsupportedVersion(_)) => trap("trusted header parser failed: version")
+            Err(HeaderError.Truncated) => trap("trusted header parser failed: truncated")
+        }
     }
 }
 ```
@@ -330,10 +382,11 @@ image QemuTests {
         let console = UartConsole(platform.uart0.claim())
         let runtime = platform.runtime.claim()
         let faults = SerialFaultPolicy(console = console)
+        let runner = TestRunner(console = console)
 
         runtime.install_fault_policy(faults)
 
-        run_tests(console = console)
+        runner.run([])
 
         return None
     }
@@ -439,12 +492,14 @@ compiler a columnar, predicated lowering target.
 Example:
 
 ```wrela
-fn mark_ready(timers: Table[TimerEntry], now: Tick) -> None {
-    let expired = timers.deadline <= now
+class TimerTableOps {
+    fn mark_ready(timers: Table[TimerEntry], now: Tick) -> None {
+        let expired = timers.deadline <= now
 
-    timers.state[expired] = TimerState.Ready
+        timers.state[expired] = TimerState.Ready
 
-    return None
+        return None
+    }
 }
 ```
 
@@ -457,8 +512,10 @@ Wrela should still include fixed vector value types for kernels where exact
 lanes matter.
 
 ```wrela
-fn xor_block(a: Vec[16, U8], b: Vec[16, U8]) -> Vec[16, U8] {
-    return a ^ b
+class ByteVectorKernels {
+    fn xor_block(a: Vec[16, U8], b: Vec[16, U8]) -> Vec[16, U8] {
+        return a ^ b
+    }
 }
 ```
 
@@ -486,10 +543,12 @@ Example shape:
 ```wrela
 use arch.aarch64.neon
 
-fn checksum_step(input: Vec[16, U8]) -> Vec[8, U16]
-    requires cpu.adv_simd
-{
-    return neon.uaddlp(input)
+class ChecksumKernels {
+    fn checksum_step(input: Vec[16, U8]) -> Vec[8, U16]
+        requires cpu.adv_simd
+    {
+        return neon.uaddlp(input)
+    }
 }
 ```
 
@@ -580,22 +639,24 @@ explain when a table/mask operation lowered cleanly and when it did not.
 Possible diagnostic modes:
 
 ```wrela
-fn classify(packets: Table[Packet]) -> None
-    vectorize diagnose
-{
-    let valid = packets.flags.has(PacketFlag.Valid)
-    packets.flags[valid].set(PacketFlag.Checked)
+class PacketClassifier {
+    fn classify(packets: Table[Packet]) -> None
+        vectorize diagnose
+    {
+        let valid = packets.flags.has(PacketFlag.Valid)
+        packets.flags[valid].set(PacketFlag.Checked)
 
-    return None
-}
+        return None
+    }
 
-fn classify_fast(packets: Table[Packet]) -> None
-    vectorize require
-{
-    let large = packets.len > 1200
-    packets.flags[large].set(PacketFlag.Jumbo)
+    fn classify_fast(packets: Table[Packet]) -> None
+        vectorize require
+    {
+        let large = packets.len > 1200
+        packets.flags[large].set(PacketFlag.Jumbo)
 
-    return None
+        return None
+    }
 }
 ```
 
@@ -623,6 +684,7 @@ This design does not require:
 - Generic `if` as a separate core branching primitive.
 - Exceptions or hidden stack unwinding.
 - Ambient panic or process-exit behavior.
+- Top-level free functions.
 
 ## Initial Language Shape
 
@@ -631,6 +693,7 @@ The first language nucleus should include:
 - `module` and explicit `use` imports.
 - `interface` for behavior contracts.
 - `class` for capability-carrying objects and adapters.
+- class methods as the only ordinary callable function form.
 - `match` as the core exhaustive scalar branching form.
 - `return` as an explicit keyword in normal control flow.
 - `Option[T]`, `Result[T, E]`, and closed `error` sums.
@@ -659,7 +722,7 @@ The next design pass should settle:
 - Whether `layout mmio` uses a distinct `Mmio[T]` field type or an enclosing
   layout rule.
 - How `Vec[N, T]` values interact with ABI boundaries.
-- How vectorization requirements are declared on functions, stages, or images.
+- How vectorization requirements are declared on methods, stages, or images.
 - Whether Wrela should have first-class `pipeline` or `stage` declarations in
   addition to table/mask operations.
 - Whether `match` is only statement-shaped or can also produce values in
@@ -667,3 +730,5 @@ The next design pass should settle:
 - Exact syntax for trap reports and source-location payloads.
 - How image-installed fault policies interact with executor-local failures and
   whole-image halt/reboot behavior.
+- Whether root phase declarations should share any syntax with methods or use a
+  distinct entry syntax.

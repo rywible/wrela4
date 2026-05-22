@@ -76,7 +76,7 @@ use { RingBufferTests } from tests.ring_buffer
 use { StorageTests } from tests.storage
 
 host image HostTests {
-    fn run(host: unique MacOSHost) -> None {
+    phase run(host: unique MacOSHost) {
         let console = host.stdout()
         let clock = host.monotonic_clock()
         let memory = host.test_arena(bytes: 64 * MiB)
