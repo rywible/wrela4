@@ -112,8 +112,8 @@ A QEMU test image wires the same suite classes to machine-backed capabilities:
 use { RingBufferTests } from tests.ring_buffer
 use { StorageTests } from tests.storage
 
-image QemuTests {
-    phase boot(platform: unique QemuVirt) {
+image QemuTests target QemuVirtPlatform {
+    phase boot(platform: unique QemuVirtPlatform) {
         let console = UartConsole(platform.uart0.claim())
         let clock = GenericTimerClock(platform.timer.claim())
         let memory = BumpArena(platform.memory.claim_region(name = "test_heap"))
@@ -156,13 +156,20 @@ pub class RingBufferTests<C: Console> {
         buffer.push(3).unwrap()
         buffer.push(4).unwrap()
 
-        assert buffer.pop().unwrap() == 1
+        let first_is_one = buffer.pop().unwrap() == 1
+        assert value first_is_one
+
         buffer.push(5).unwrap()
 
-        assert buffer.pop().unwrap() == 2
-        assert buffer.pop().unwrap() == 3
-        assert buffer.pop().unwrap() == 4
-        assert buffer.pop().unwrap() == 5
+        let second_is_two = buffer.pop().unwrap() == 2
+        let third_is_three = buffer.pop().unwrap() == 3
+        let fourth_is_four = buffer.pop().unwrap() == 4
+        let fifth_is_five = buffer.pop().unwrap() == 5
+
+        assert value second_is_two
+        assert value third_is_three
+        assert value fourth_is_four
+        assert value fifth_is_five
     }
 }
 ```
@@ -241,7 +248,8 @@ pub class StorageTests<C: Console, M: Memory> {
 
         disk.write(0, block).unwrap()
 
-        assert disk.read(0).unwrap() == block
+        let block_round_trips = disk.read(0).unwrap() == block
+        assert value block_round_trips
     }
 
     test "propagates write failure"
@@ -252,13 +260,58 @@ pub class StorageTests<C: Console, M: Memory> {
     {
         let block = Block.filled(0xaa)
 
-        assert disk.write(0, block).is_error()
+        let propagates_failure = disk.write(0, block).is_error()
+        assert value propagates_failure
     }
 }
 ```
 
 This keeps fake construction close to the tests that need it without bloating
 the image root. Test-local fakes are module-private by default unless exported.
+
+## Assertions
+
+Wrela tests should not have a generic `assert expr` form. Assertions must state
+which kind of equality or claim is being checked.
+
+Initial assertion forms:
+
+- `assert value claim`: checks a named value-equality or value-shaped boolean
+  claim.
+- `assert same claim`: checks a named identity claim: the same class instance,
+  authority, storage identity, or identity-bearing capability.
+
+Examples:
+
+```wrela
+test "services share parser identity" {
+    let parser = HeaderParser(limits = limits)
+    let service_a = SharedServiceA(parser = read parser)
+    let service_b = SharedServiceB(parser = read parser)
+
+    let share_parser = service_a.parser == service_b.parser
+    assert same share_parser
+}
+
+test "parsed header matches expected value" {
+    let actual = parser.parse(bytes).unwrap()
+    let expected = Header(version = 1, length = 32)
+
+    let header_matches = actual == expected
+    assert value header_matches
+}
+```
+
+Assertion failure is a test failure, not a trap. A trap inside a test is
+reported separately as abnormal failure.
+
+The assertion mode is part of typechecking:
+
+- `assert value` is valid for scalar, enum, error, and `data` value claims.
+- `assert same` is valid for classes, unique authorities, borrowed class
+  references, and other identity-bearing capabilities.
+- `assert same` is invalid for pure `data` values unless a future explicit
+  handle type gives them identity.
 
 ## Runner Semantics
 
@@ -289,6 +342,19 @@ The runner does not perform:
 - Automatic imports.
 - Host or platform capability construction.
 
+Runner summaries should be ordinary data:
+
+```wrela
+data TestSummary {
+    passed: U32
+    failed: U32
+    trapped: U32
+    timed_out: U32
+}
+```
+
+Hosted process-exit mapping belongs in the hosted root, not inside suites.
+
 ## Typechecking Rules
 
 The compiler enforces the test model with these rules:
@@ -303,9 +369,11 @@ The compiler enforces the test model with these rules:
   same test declaration.
 - A `with` fixture is created fresh per test execution and destroyed after that
   test completes.
-- Host authority roots such as `MacOSHost` and platform roots such as `QemuVirt`
-  should not be passed into suites. Suites should receive narrowed
-  capabilities.
+- Host authority roots such as `MacOSHost` and platform roots such as
+  `QemuVirtPlatform` should not be passed into suites. Suites should receive
+  narrowed capabilities.
+- `assert value` accepts only value-shaped claims.
+- `assert same` accepts only identity-bearing claims.
 
 ## Dependency Graph
 
@@ -342,6 +410,7 @@ This design does not include:
 - Ambient filesystem, stdout, clock, allocator, or process access.
 - A requirement that all tests be runnable under every profile.
 - Interface-typed suite fields or hidden runtime capability objects.
+- A generic `assert expr` form.
 
 ## Open Language Questions
 
@@ -352,9 +421,8 @@ The following language primitives still need more detail:
   methods.
 - Whether `test` declarations are allowed only in classes or also modules.
 - How `with` fixture lifetimes interact with ownership and borrowing.
-- How assertions are represented in the type system.
-- How test failures differ from traps and fault-policy reports.
-- How runner result reporting is modeled without hidden process exit behavior.
+- Exact diagnostic payloads for `assert value` and `assert same` failures.
+- Exact hosted process exit mapping for `TestSummary`.
 - How heterogeneous lists of generic test suite instances are represented
   without runtime interface objects.
 

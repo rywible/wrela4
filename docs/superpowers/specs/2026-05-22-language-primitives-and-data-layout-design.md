@@ -13,17 +13,24 @@ This design captures the initial shape of the language nucleus:
 
 - Scalar control and authority code remains explicit and readable.
 - Modules do not allow top-level `fn` declarations.
+- Modules are static namespaces with no initialization side effects.
 - Callable functions are methods under classes.
 - Interfaces are static compile-time contracts, not runtime vtables.
+- Constructors initialize every class field exactly once.
 - Class fields are immutable after construction.
 - Class values move by default; shared dependencies must be `read`.
+- Borrowing uses explicit `read`, `mut`, and `own` access authority.
 - Generics are compile-time only and use capitalized constraints.
 - Interface names are static constraints, not hidden runtime field types.
+- Scalar primitive types are fixed-size and dangerous numeric behavior is
+  explicit.
 - Scalar branching uses exhaustive `match`, not a generic `if`.
 - Loops describe work shape through `repeat`, table `for`, `drain`, `reduce`,
   `scan`, and intentional `loop`.
 - Methods and phase blocks use explicit `return`.
 - Recoverable errors are typed values, not exceptions.
+- Privileged machine effects come from `unique class` authority, not
+  developer-written permission annotations.
 - Memory is explicit authority, not an ambient allocator.
 - OOM and capacity violations trap by default.
 - Bulk logical data is columnar by default.
@@ -39,6 +46,7 @@ The explicit test-suite model depends on these language primitives:
 - `interface` for behavior-shaped capabilities such as `Console`, `Clock`,
   `Memory`, and `BlockDevice`.
 - `test` as a compiler-known declaration inside suite classes.
+- `assert value` and `assert same` for value equality versus identity claims.
 - `with` fixtures for test-local fake construction.
 - Explicit root images that import and construct suite classes.
 
@@ -61,6 +69,30 @@ This keeps executable behavior attached to an explicit owner:
 Image and host-image roots may contain phase or entry declarations. Those are
 root composition hooks, not importable module-level functions. They establish
 authority and construct classes that do the ordinary work.
+
+## Modules And Visibility
+
+Modules are static namespaces. Importing a module does not run code, allocate
+memory, install handlers, register tests, or change the image graph except by
+making names available to the importing module.
+
+Initial module rules:
+
+- One module per source file.
+- The module path follows the file path unless explicitly declared.
+- `use` imports names explicitly.
+- `pub` is required for cross-module visibility.
+- Wildcard imports should not exist in v1.
+- Cyclic value dependencies are rejected.
+- Cyclic type references are allowed only when they do not require impossible
+  layout or initialization.
+- Root images decide the reachable graph.
+- Tests are reachable only through explicit root imports and construction.
+- A package manifest can name source roots and target roots, but it cannot
+  inject hidden dependencies.
+
+This keeps image review honest: dependency edges are visible in source and no
+module can smuggle initialization work into the image.
 
 ## Types And Ownership
 
@@ -215,6 +247,116 @@ unique class Coordinator {
 This keeps the dependency graph stable after construction while still allowing
 owned state to change through explicit mutable receiver access.
 
+## Constructors And Initialization
+
+Classes use explicit class-scoped `constructor` declarations. A constructor is
+not a top-level function and has no `self` receiver because there is no object
+yet. It returns `Self(...)` with every field initialized exactly once.
+
+```wrela
+class InMemoryBlockDevice<M: Memory> implements BlockDevice {
+    memory: M
+    blocks: U32
+    storage: BlockArray
+
+    constructor(memory: M, blocks: U32) {
+        return Self(
+            memory = memory,
+            blocks = blocks,
+            storage = BlockArray.allocate(memory = memory, blocks = blocks),
+        )
+    }
+
+    fn read(mut self, index: U64, out: Buffer[U8]) -> Result[None, DiskError] {
+        match index >= blocks {
+            true => return Err(DiskError.OutOfRange)
+            false => return storage.read(index = index, out = out)
+        }
+    }
+}
+```
+
+Constructor rules:
+
+- Constructor parameters move by default.
+- A field declared `read T` must be initialized from an explicit `read` borrow.
+- Partially initialized class values do not exist in source.
+- Runtime field defaults should not exist in v1. Runtime defaults hide work and
+  authority.
+- Data values use structural literals. Validation belongs in class constructors
+  or methods that return `Result`.
+- Constructors may call methods on fully initialized dependencies, but not on
+  `Self` before `Self(...)` has been returned.
+- A recoverably failing constructor returns `Result[Self, E]`.
+- Capacity or OOM failure during construction traps unless the constructed type
+  explicitly models admission failure.
+
+A constructor can count as class behavior for authority-bearing classes, but it
+should not turn a value-like bag of fields into a class. If a type has no
+meaningful behavior or authority, it should be `data`.
+
+## Borrowing And Lifetimes
+
+Borrow checking should be mostly inferred, but source syntax for access
+authority stays explicit.
+
+Borrow rules:
+
+- `read` allows shared access and cannot mutate or consume.
+- `mut` allows exclusive access and can mutate owned state.
+- `own` consumes the value.
+- Any number of `read` borrows may coexist.
+- A `mut` borrow excludes all other borrows for its duration.
+- An owned value may be temporarily reborrowed as `read` or `mut`.
+- Borrowed class fields cannot outlive the owner they borrow from.
+- Values created from `with` frames carry frame lifetime and cannot escape that
+  frame.
+- Row tokens, scan indexes, drain items, and frame handles are scoped compiler
+  capabilities. They cannot be stored, returned, published, or hidden in data.
+
+Long-lived class fields remain owned or `read` in v1. Long-lived `mut` fields
+stay out of the initial language.
+
+Wrela should avoid explicit lifetime parameters in v1 source unless the simpler
+rules prove insufficient. Diagnostics can still name compiler-generated
+regions:
+
+```text
+cannot store value from frame 'frame#2' into executor arena 'executor#0'
+```
+
+Returning borrowed views should be allowed only when the return type clearly
+carries a lifetime from an input parameter. If that rule becomes hard to explain
+or diagnose, v1 should disallow returning borrowed views and add them later.
+
+## Primitive Types And Scalar Semantics
+
+Primitive scalar types are fixed-size and source-visible:
+
+- `Bool`: closed `true | false`.
+- Unsigned integers: `U8`, `U16`, `U32`, `U64`, `USize`.
+- Signed integers: `I8`, `I16`, `I32`, `I64`, `ISize`.
+- Floats: `F32`, `F64`, primarily for data-plane kernels.
+- `None`: unit value.
+- Closed `enum` and `error` sums.
+- Bitflags as a distinct declaration form or library type, not ad hoc integer
+  aliases.
+
+`USize` and `ISize` are 64-bit because Wrela is AArch64-only. The names remain
+useful for lengths, offsets, and ABI-shaped values.
+
+Default integer arithmetic traps on overflow, division by zero, invalid
+remainder, and invalid shift counts. Wrapping, saturating, and checked
+arithmetic are explicit operations.
+
+Conversion rules:
+
+- Widening conversions can use direct conversion syntax.
+- Narrowing conversions must be explicit as trapping or checked conversion.
+- Endian conversion is explicit.
+- Wire and disk layouts should use wrapper types such as `Be[U16]` and
+  `Le[U32]`.
+
 ## Unique Classes
 
 `unique class` is for authority-bearing owners and identity-sensitive state.
@@ -237,6 +379,66 @@ Unique classes also participate in image graph checks: roots cannot be forged,
 memory cannot be assigned to the wrong executor, device paths cannot be passed
 to multiple owners, and authority-bearing values cannot be hidden inside
 copyable data.
+
+## Authority-Gated Machine Effects
+
+Privileged behavior comes from authority in the object graph, not from
+developer-written permission annotations. A method cannot opt into IO, raw
+memory, pointer arithmetic, assembly, MMIO, DMA, blocking, entropy, or time by
+writing a `requires` effect clause.
+
+Instead, those effects are available only through `unique class` capabilities
+granted by roots or by other unique authorities.
+
+```wrela
+unique class PageTableBuilder {
+    memory: unique PhysicalMemoryAuthority
+
+    asm fn invalidate_tlb(mut self, address: Address) -> None {
+        // privileged instruction selected by this authority-bearing class
+    }
+
+    fn map(mut self, physical: PhysicalAddress, virtual: Address) -> None {
+        // address arithmetic is permitted because this class owns mapping
+        // authority.
+        memory.map(physical = physical, virtual = virtual)
+
+        return None
+    }
+}
+```
+
+The compiler still infers and reports effects:
+
+```text
+PageTableBuilder.map:
+  effects: PhysicalMemory, AddressArithmetic, Trap
+  authority source: image QemuVirtBoot.platform.memory
+```
+
+Important inferred effects include:
+
+- `Trap`: can leave normal control flow through `trap`.
+- `Io`: touches device or host IO capability.
+- `Volatile`: performs MMIO or volatile memory access.
+- `Time`: reads a clock.
+- `Entropy`: reads randomness.
+- `Arena`: consumes arena or frame capacity.
+- `Mutate`: mutates owned state through `mut self` or a mutable capability.
+- `Dma`: hands memory to a device.
+- `Block`: may wait for an external event.
+- `AddressArithmetic`: manipulates raw addresses or pointer-shaped values.
+- `Assembly`: enters an assembly function.
+
+Effect-sensitive compiler checks use those inferred facts. For example,
+`vectorize require` rejects calls with IO, volatile, time, entropy, or unknown
+mutation effects. Hosted deterministic tests can reject time or entropy unless
+the root passes fake capabilities. Image diagnostics can list methods that may
+block in interrupt context.
+
+But developers do not write effect annotations as permission slips. If normal
+code needs privileged work, it must receive a narrowed explicit capability from
+the image graph.
 
 ## Static Interfaces
 
@@ -363,6 +565,14 @@ specialize those instances and report their code and data footprint. Sharing
 machine code between compatible instantiations can be a later optimization, but
 the source semantics should not depend on it.
 
+Type arguments are inferred at construction and method call sites when
+unambiguous. Explicit type arguments use square brackets:
+`RingBuffer[U8, 128](arena = arena)`.
+
+Const generics must be compile-time evaluable. Wrela should not include
+higher-kinded types, runtime generic dictionaries, or existential interface
+objects in v1.
+
 Tables should initially require `T: Data`, not arbitrary classes. This
 preserves the columnar storage and vectorization model. Classes can own tables
 and indexes, but a table should not become a bag of hidden object identities.
@@ -375,19 +585,37 @@ Wrela targets AArch64 only. That lets the language and compiler assume:
 - AArch64 memory ordering rules.
 - AArch64 exception levels and boot realities.
 - Advanced SIMD/NEON as the first vector target when available.
-- Optional future SVE support behind explicit target requirements.
+- Optional future SVE support behind platform and image target selection.
 
 The language should still avoid baking a single microarchitecture into source
-semantics. CPU features belong in image/root requirements, not in ambient
-compiler assumptions.
+semantics. CPU features belong to the root-selected platform target and the
+unique platform authority, not ambient compiler assumptions or method-level
+permission annotations.
+
+The initial hardware target order is:
+
+1. QEMU `virt` generic AArch64 machine.
+2. Raspberry Pi 5.
+3. GCP cloud ARM VM.
+
+Each target should expose a concrete platform authority:
+
+```wrela
+unique class QemuVirtPlatform
+unique class RaspberryPi5Platform
+unique class GcpArmVmPlatform
+```
+
+Portable code should sit behind narrowed interfaces such as `Console`, `Clock`,
+`Memory`, `BlockDevice`, `NetworkDevice`, and platform-specific device
+capabilities. Boot code can be target-specific; ordinary services should not
+need to know which platform root created their capabilities.
 
 Example:
 
 ```wrela
-image PacketAppliance
-    requires cpu.adv_simd
-{
-    phase boot(platform: unique QemuVirt) {
+image PacketAppliance target QemuVirtPlatform {
+    phase boot(platform: unique QemuVirtPlatform) {
         let console = UartConsole(platform.uart0.claim())
         console.write("packet appliance booted")
 
@@ -497,8 +725,8 @@ The initial loop forms are:
   tokens.
 - `drain queue.up_to(N) as item`: finite systems batch work from a queue, ring,
   topic, or ready list.
-- `reduce rows as acc { body }`: finite accumulation over rows, bytes, or other
-  bounded ranges.
+- `reduce rows as row, acc { body }`: finite accumulation over rows, bytes, or
+  other bounded ranges.
 - `scan bytes as i until predicate { body }`: bounded sentinel search over a
   contiguous byte range.
 - `loop`: intentional unbounded control flow.
@@ -600,8 +828,8 @@ class PacketStats {
     fn total_length(read self, packets: Table[Packet, 256]) -> U64 {
         let valid = packets.flags.has(PacketFlag.Valid)
 
-        let total = reduce packets.rows(valid) as acc: U64 = 0 {
-            acc += packets.length[row]
+        let total = reduce packets.rows(valid) as row, acc: U64 = 0 {
+            yield acc + packets.length[row]
         }
 
         return total
@@ -612,6 +840,9 @@ class PacketStats {
 For table-row reductions, the selected row token is available as `row` inside
 the block. For byte reductions, the index token is available under the name
 chosen by the source form.
+
+`reduce` uses `yield` to produce the next accumulator value. `break` and
+`continue` are not valid inside `reduce` in v1.
 
 Integer wrapping addition, bitwise operations, min/max, count, any, and all are
 good initial reduction targets. Floating-point and saturating arithmetic should
@@ -648,6 +879,9 @@ The body runs for elements that have not satisfied the predicate. Pure scans can
 lower to vectorized compare/search kernels. Scans with side effects remain
 bounded and analyzable, but the effects constrain reordering.
 
+`scan` uses `until` as its only early-exit mechanism in v1. `break` and
+`continue` are not valid inside `scan`.
+
 ### Intentional Control Loops
 
 `loop` is the explicit unbounded form. It is appropriate for event loops,
@@ -671,6 +905,9 @@ The compiler should not try to prove that `loop` terminates. It should instead
 treat it as intentional non-termination unless the body exits with `return`,
 `break`, or `trap`. Bounded retry and polling should usually be expressed with
 `repeat Attempts as attempt`, not open-ended `loop`.
+
+`break` and `continue` are valid in `repeat`, table-row `for`, `drain`, and
+`loop`. Value-bearing `break` should not exist in v1.
 
 ## Return
 
@@ -885,8 +1122,8 @@ interface FaultPolicy {
     fn fatal(mut self, reason: TrapReport) -> Never
 }
 
-image QemuTests {
-    phase boot(platform: unique QemuVirt) {
+image QemuTests target QemuVirtPlatform {
+    phase boot(platform: unique QemuVirtPlatform) {
         let console = UartConsole(platform.uart0.claim())
         let runtime = platform.runtime.claim()
         let faults = SerialFaultPolicy(console = console)
@@ -898,6 +1135,19 @@ image QemuTests {
 
         return None
     }
+}
+```
+
+Trap reports must be bounded and allocation-free:
+
+```wrela
+data TrapReport {
+    code: TrapCode
+    source: SourceLocation
+    image: ImageName
+    phase: PhaseName
+    executor: Option[ExecutorId]
+    message: StaticString
 }
 ```
 
@@ -929,8 +1179,8 @@ Memory is an explicit authority graph:
 Example root shape:
 
 ```wrela
-image PacketAppliance {
-    phase boot(platform: unique QemuVirt) {
+image PacketAppliance target QemuVirtPlatform {
+    phase boot(platform: unique QemuVirtPlatform) {
         let region = platform.memory.require_region(
             name = "root",
             bytes = 64 * MiB,
@@ -951,6 +1201,40 @@ image PacketAppliance {
 The compiler should be able to report the memory authority tree, including
 root regions, child arenas, executor ownership, queue/topic buffers, tables,
 indexes, caches, DMA-intended buffers, and scratch frame bounds.
+
+## Pointers, Buffers, And Raw Memory
+
+Ordinary Wrela code should not manipulate general raw pointers. It should
+manipulate typed capabilities and bounded views.
+
+Core memory-facing types:
+
+- `Buffer[T]`: mutable bounded view of initialized contiguous elements.
+- `ReadBuffer[T]`: read-only bounded view of initialized contiguous elements.
+- `Bytes`: read-only byte view.
+- `Address`: opaque virtual address value, not dereferenceable by itself.
+- `PhysicalAddress`: opaque physical address value, usable only through
+  platform or mapping authority.
+- `Mmio[T]`: volatile memory-mapped register cell.
+- `DmaBuffer[T]`: memory with DMA-suitable ownership, alignment, and cache
+  policy.
+
+Rules:
+
+- No nullable pointers. Use `Option[T]`.
+- No pointer arithmetic in ordinary code.
+- Byte reinterpretation requires an explicit layout or parser.
+- A `Buffer[T]` carries length, alignment, initialization state, and lifetime.
+- Mutable buffer access requires exclusive borrow of the view.
+- MMIO fields must be accessed through volatile operations with explicit memory
+  ordering rules.
+- Physical memory cannot be forged from integers. It comes from root/platform
+  authority.
+
+Pointer arithmetic, raw address manipulation, and assembly access are allowed
+only inside `unique class` capabilities that own the relevant machine
+authority. This keeps low-level drivers possible without creating ambient
+machine access.
 
 ## Durable Arenas And Frames
 
@@ -1047,6 +1331,9 @@ The primitive split is:
 - `Index[K, N]` owns lookup metadata.
 - An index maps keys to table rows; it does not own row data.
 
+Initial tables and indexes use static const capacities. `Table[T, Rows]`
+requires `T: Data`, and `Rows` is a `Const[U32]`.
+
 Example:
 
 ```wrela
@@ -1072,7 +1359,8 @@ class SessionStore {
 ```
 
 Different classes can choose different index strategies by owning different
-index types:
+index types. Index strategy should be a concrete type or type parameter, not a
+runtime policy field:
 
 - open-addressed index
 - sorted index
@@ -1084,6 +1372,9 @@ Wrela should start without sugar over `Index + Table`. Users can compose their
 own classes around tables and indexes. If a future pattern proves common, the
 language can add indexed-table views later without changing the primitive memory
 model.
+
+Stable identity is not a property of `Table`. If stable identity is needed, use
+an index, a durable handle, or a future `StableTable` type.
 
 ## Logical Data
 
@@ -1146,6 +1437,11 @@ array-of-structs row in memory. Tables are also bounded storage: inserting past
 declared capacity traps unless the table type explicitly advertises a
 non-trapping policy.
 
+Row tokens are scoped compiler capabilities. They cannot be stored, returned,
+published, hidden inside data, or converted to pointers. Structural table
+operations that can move rows are forbidden while row tokens for that table are
+live.
+
 ## Masks
 
 `Mask` represents a selected set of table rows or vector lanes. Masks are the
@@ -1166,6 +1462,11 @@ Mask operations should support:
 - Selection and blending.
 - Counting selected rows.
 - Filtering or compaction when physical movement is required.
+
+Each mask carries table provenance and capacity. A mask produced from one table
+cannot be accidentally applied to another table. Mask combination is allowed
+only for compatible masks, and masked writes must prove non-overlapping mutable
+access to the target columns.
 
 This lets branches over many records become predicated operations instead of
 scalar control-flow diamonds.
@@ -1223,7 +1524,9 @@ Initial fixed vectors should target common 128-bit Advanced SIMD shapes:
 
 Some kernels need exact instruction selection. Wrela should provide explicit
 AArch64 intrinsic and assembly escape hatches, but they should not be the normal
-vector programming model.
+vector programming model. Intrinsics are checked against the root-selected
+target features. Assembly functions are allowed only inside `unique class`
+authorities that own the relevant machine capability.
 
 Example shape:
 
@@ -1231,17 +1534,15 @@ Example shape:
 use arch.aarch64.neon
 
 class ChecksumKernels {
-    fn checksum_step(read self, input: Vec[16, U8]) -> Vec[8, U16]
-        requires cpu.adv_simd
-    {
+    fn checksum_step(read self, input: Vec[16, U8]) -> Vec[8, U16] {
         return neon.uaddlp(input)
     }
 }
 ```
 
-Assembly and intrinsics must be explicit about:
+Assembly functions and intrinsics must be explicit about:
 
-- Required CPU features.
+- Required CPU features, as provided by the root-selected target.
 - Inputs and outputs.
 - Clobbers.
 - Memory effects.
@@ -1293,6 +1594,48 @@ The split is:
 
 Physical layout is opt-in. Logical data remains free for the compiler to store
 and transform efficiently.
+
+Wrela's initial external ABI target is AArch64 AAPCS64:
+
+- `layout C data` follows the AArch64 C ABI for size, alignment, and field
+  offsets.
+- `layout packed data` has no implicit unaligned typed references. Field access
+  lowers to safe loads and stores.
+- `layout mmio data` requires `Mmio[T]` fields or an enclosing MMIO rule that
+  makes every field volatile.
+- Logical `data` has compiler-owned layout and is not ABI-stable.
+- `Vec[N, T]` is not a stable external ABI type in v1 unless wrapped in an
+  explicit layout or intrinsic boundary.
+- Endian-specific physical fields use explicit wrapper types.
+
+C interop should be minimal in v1. The first goal is appliance images and
+hosted tests, not a broad foreign-function interface.
+
+## Image Roots And Phases
+
+Roots are composition declarations, not ordinary functions. They are the only
+source of platform or host authority.
+
+Root forms:
+
+- `host image Name { phase run(host: unique MacOSHost) { ... } }`
+- `image Name target QemuVirtPlatform { phase boot(platform: unique
+  QemuVirtPlatform) { ... } }`
+
+Root rules:
+
+- Roots explicitly import every reachable module.
+- Roots construct the authority graph.
+- Roots narrow broad host/platform authority into smaller capabilities.
+- Roots install fault policy.
+- Roots select target platform, CPU features, and image/linker layout.
+- Root phase declarations are not importable methods.
+- Phase ordering is explicit.
+- No module has initialization side effects outside the root graph.
+
+Linker and image layout should be controlled by root-owned declarations:
+named memory regions, sections, stacks, arenas, DMA regions, and boot entry
+points.
 
 ## Classes And Interfaces
 
@@ -1384,6 +1727,9 @@ This design does not require:
 - Runtime vtables or implicit dynamic dispatch for interfaces.
 - Runtime generic dictionaries or hidden type metadata for generics.
 - Interface-typed fields as implicit existential objects.
+- Developer-authored effect or permission clauses for privileged operations.
+- Pointer arithmetic or raw memory dereference outside unique authority.
+- Assembly functions outside unique authority.
 - Implicit copying of class values.
 - Mutable class-field rebinding after construction.
 - Long-lived `mut` dependency fields in the initial language.
@@ -1391,12 +1737,15 @@ This design does not require:
 - General-purpose garbage collection or free.
 - Built-in unbounded hash maps.
 - Initial sugar over `Index + Table`.
+- Broad C interop in v1.
+- Wildcard imports in v1.
 
 ## Initial Language Shape
 
 The first language nucleus should include:
 
-- `module` and explicit `use` imports.
+- `module`, explicit `use` imports, `pub` visibility, and no module
+  initialization side effects.
 - static `interface` contracts with no implicit runtime vtables.
 - compile-time generics over types and constants.
 - capitalized generic constraints such as `Data`, `Copy`, `BlockDevice`, and
@@ -1404,11 +1753,15 @@ The first language nucleus should include:
 - interface names usable as generic constraints, not hidden runtime field types.
 - `class` for capability-carrying objects and adapters.
 - class methods as the only ordinary callable function form.
+- explicit class constructors that initialize every field exactly once.
 - explicit receiver modes: `read self`, `mut self`, and `own self`.
 - immutable class field bindings after construction.
 - class values that move by default, with shared dependencies declared as
   `read`.
 - `unique class` for authority-bearing owners with graph checks.
+- authority-gated machine effects through unique capabilities.
+- fixed-size primitive scalar types with explicit wrapping, saturating, and
+  checked arithmetic.
 - `match` as the core exhaustive scalar branching form.
 - work-shaped loops: `repeat`, table-row `for`, `drain`, `reduce`, `scan`, and
   intentional `loop`.
@@ -1417,46 +1770,43 @@ The first language nucleus should include:
 - `try`, `try else return`, and expanded `try else err { ... }`.
 - `trap` as a `Never`-typed abnormal control-flow boundary.
 - memory authority roots and bounded arenas.
+- bounded memory views such as `Buffer[T]`, `ReadBuffer[T]`, `Bytes`, `Mmio[T]`,
+  and `DmaBuffer[T]`.
 - `with` frames for scoped scratch memory.
 - `data` for logical records.
-- `Table[T]` for columnar bulk logical data.
-- `Index[K, N]` for bounded lookup metadata over tables.
-- `Mask` for row selection and predication.
+- `Table[T, N]` for static-capacity columnar bulk logical data.
+- concrete index types for bounded lookup metadata over tables.
+- table-provenance-aware `Mask` values for row selection and predication.
 - `layout` for physical memory representation.
 - `Vec[N, T]` for fixed vector kernels.
-- `image` and `host image` roots.
+- `image` and `host image` roots, starting with QEMU `virt`, then Raspberry Pi
+  5, then GCP cloud ARM VM.
 - `test` declarations inside suite classes.
+- `assert value` and `assert same` inside test blocks.
 
 This gives Wrela a scalar authority model and a vector-friendly data model
 without making either one masquerade as the other.
 
 ## Open Questions
 
-The next design pass should settle:
+The next design pass should still settle:
 
-- Exact `Table` capacity syntax and whether capacity is always static.
-- Exact `Index` strategy syntax and whether strategy is a type, constructor, or
-  policy field.
-- Whether `Mask` is parameterized by capacity, table identity, or lane count.
 - Exact row-token type rules for table iteration without exposing row
   addresses.
 - How table columns interact with ownership and borrowing.
 - How masked writes report or forbid overlapping aliases.
-- Exact syntax for reduction accumulator seeds and custom reduction operators.
+- Exact syntax for custom reduction operators.
 - Exact result type names for `scan` and whether scans can omit an empty body.
-- Exact `break` and `continue` rules for `repeat`, table `for`, `drain`,
-  `reduce`, `scan`, and `loop`.
 - Whether retry/poll loops need additional diagnostics beyond bounded `repeat`.
 - Exact lifetime notation and diagnostics for `read` fields and borrowed class
   dependencies.
-- Whether any class field mode beyond owned and `read` should exist after v1.
+- Exact diagnostic shape for inferred effects and authority sources.
 - Exact built-in generic constraint names beyond the initial capitalized set.
-- Whether generic type arguments are always inferred from constructors or can be
-  explicitly supplied at construction sites.
 - Whether later backends share code between compatible generic instantiations.
 - Exact arena type names for root, executor, driver, DMA, table, cache, and
   scratch memory.
-- Exact trap report payload for OOM and capacity violations.
+- Exact `TrapCode` cases for OOM, capacity violations, bounds failures, and
+  arithmetic traps.
 - Whether `layout mmio` uses a distinct `Mmio[T]` field type or an enclosing
   layout rule.
 - How `Vec[N, T]` values interact with ABI boundaries.
@@ -1465,7 +1815,6 @@ The next design pass should settle:
   addition to table/mask operations.
 - Whether `match` is only statement-shaped or can also produce values in
   limited contexts.
-- Exact syntax for trap reports and source-location payloads.
 - How image-installed fault policies interact with executor-local failures and
   whole-image halt/reboot behavior.
 - Whether root phase declarations should share any syntax with methods or use a
