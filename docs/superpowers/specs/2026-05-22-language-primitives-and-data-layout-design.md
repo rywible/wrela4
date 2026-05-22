@@ -14,6 +14,9 @@ This design captures the initial shape of the language nucleus:
 - Scalar control and authority code remains explicit and readable.
 - Modules do not allow top-level `fn` declarations.
 - Callable functions are methods under classes.
+- Interfaces are static compile-time contracts, not runtime vtables.
+- Class fields are immutable after construction.
+- Class values move by default; shared dependencies must be `read`.
 - Scalar branching uses exhaustive `match`, not a generic `if`.
 - Methods and phase blocks use explicit `return`.
 - Recoverable errors are typed values, not exceptions.
@@ -54,6 +57,201 @@ This keeps executable behavior attached to an explicit owner:
 Image and host-image roots may contain phase or entry declarations. Those are
 root composition hooks, not importable module-level functions. They establish
 authority and construct classes that do the ordinary work.
+
+## Types And Ownership
+
+Wrela's type system separates value shape, behavior, and ownership.
+
+The core categories are:
+
+- `data`: plain logical values. Data is copyable when all fields are copyable.
+- `layout data`: physical representation for ABI, wire, disk, and MMIO
+  boundaries.
+- `class`: behavior plus owned dependencies. A class must define at least one
+  method or test declaration.
+- `unique class`: authority-bearing behavior and state with stricter
+  construction and graph checks.
+- `interface`: static method contract.
+
+If a type has fields but no methods or test declarations, it should be `data`,
+not `class`.
+
+Class values move by default. They are not implicitly copied. If two owners need
+the same behavior, the image or constructor code must create two instances and
+move one into each owner.
+
+```wrela
+class HeaderParser {
+    limits: ParserLimits
+
+    fn parse(read self, bytes: Bytes) -> Result[Header, HeaderError] {
+        return HeaderParserCore(limits = limits).parse(bytes = bytes)
+    }
+}
+
+class ServiceA {
+    parser: HeaderParser
+
+    fn run(read self, bytes: Bytes) -> Result[Header, HeaderError] {
+        return parser.parse(bytes = bytes)
+    }
+}
+
+class ServiceB {
+    parser: HeaderParser
+
+    fn run(read self, bytes: Bytes) -> Result[Header, HeaderError] {
+        return parser.parse(bytes = bytes)
+    }
+}
+
+host image ParserServices {
+    phase run(host: unique MacOSHost) {
+        let service_a = ServiceA(parser = HeaderParser(limits = limits_a))
+        let service_b = ServiceB(parser = HeaderParser(limits = limits_b))
+
+        return None
+    }
+}
+```
+
+Reusing a moved class value is invalid:
+
+```wrela
+host image InvalidParserReuse {
+    phase run(host: unique MacOSHost) {
+        let parser = HeaderParser(limits = limits)
+        let service_a = ServiceA(parser = parser)
+        let service_b = ServiceB(parser = parser) // invalid: parser was moved
+
+        return None
+    }
+}
+```
+
+Shared dependencies must be explicit read-only borrows:
+
+```wrela
+class SharedServiceA {
+    parser: read HeaderParser
+
+    fn run(read self, bytes: Bytes) -> Result[Header, HeaderError] {
+        return parser.parse(bytes = bytes)
+    }
+}
+
+class SharedServiceB {
+    parser: read HeaderParser
+
+    fn run(read self, bytes: Bytes) -> Result[Header, HeaderError] {
+        return parser.parse(bytes = bytes)
+    }
+}
+
+host image SharedParserServices {
+    phase run(host: unique MacOSHost) {
+        let parser = HeaderParser(limits = limits)
+        let service_a = SharedServiceA(parser = read parser)
+        let service_b = SharedServiceB(parser = read parser)
+
+        return None
+    }
+}
+```
+
+The compiler checks that read-borrowed fields cannot mutate or consume the
+borrowed object and cannot outlive the owner they borrow from.
+
+## Class Fields And Self Modes
+
+Class fields are immutable bindings after construction. A method may mutate the
+state behind an owned field when it has `mut self`, but it may not reassign the
+field itself.
+
+```wrela
+unique class SessionStore {
+    sessions: Table[Session, 4096]
+    by_id: Index[SessionId, 8192]
+
+    fn insert(mut self, session: Session) -> None {
+        let row = sessions.insert(session)
+        by_id.insert(key = session.id, row = row)
+
+        return None
+    }
+
+    fn replace_index(mut self, index: Index[SessionId, 8192]) -> None {
+        self.by_id = index // invalid: class fields are immutable bindings
+    }
+}
+```
+
+Methods explicitly declare their receiver mode:
+
+- `read self`: shared read access, no mutation, no consumption.
+- `mut self`: exclusive mutable access to owned state.
+- `own self`: consumes the object.
+
+Long-lived class fields may be owned or `read`. Initial Wrela should not allow
+long-lived `mut` fields; shared mutable dependencies should be modeled through a
+unique owner/coordinator or an explicit synchronization capability.
+
+```wrela
+unique class Coordinator {
+    store: SessionStore
+
+    fn mark(mut self, id: SessionId, now: Tick) -> None {
+        store.mark_active(id = id, now = now)
+
+        return None
+    }
+}
+```
+
+This keeps the dependency graph stable after construction while still allowing
+owned state to change through explicit mutable receiver access.
+
+## Unique Classes
+
+`unique class` is for authority-bearing owners and identity-sensitive state.
+
+Examples include:
+
+- host and platform roots
+- hardware authorities
+- memory arenas
+- executor state
+- drivers and device paths
+- queues, topics, caches, tables, and indexes that own durable storage
+- DMA and MMIO capabilities
+
+Unique values move by default and cannot be copied. They can be borrowed with
+`read` or `mut` only when the capability type permits that access. Most root
+authorities should be narrowed into smaller capabilities before being shared.
+
+Unique classes also participate in image graph checks: roots cannot be forged,
+memory cannot be assigned to the wrong executor, device paths cannot be passed
+to multiple owners, and authority-bearing values cannot be hidden inside
+copyable data.
+
+## Static Interfaces
+
+Interfaces are static contracts. They do not imply runtime vtables, fat
+pointers, dynamic dispatch, hidden allocation, or runtime type dictionaries.
+
+```wrela
+interface BlockDevice {
+    fn read(index: U64, out: Buffer[U8]) -> Result[None, DiskError]
+    fn write(index: U64, data: Buffer[U8]) -> Result[None, DiskError]
+}
+```
+
+A class satisfies an interface by providing the required methods. Calls through
+interface-constrained generics are statically resolved or monomorphized.
+
+Dynamic dispatch, if Wrela ever needs it, must be an explicit value such as a
+declared dispatch table capability. It is not the default meaning of
+`interface`.
 
 ## AArch64-Only Backend
 
@@ -282,11 +480,12 @@ The inline mapped form uses `else return` so the control flow is visible:
 ```wrela
 class HeaderLoader {
     disk: BlockDevice
+    parser: HeaderParser
 
     fn load(out: Buffer[U8]) -> Result[Header, LoadError] {
         try disk.read(0, out) else return LoadError.Disk
 
-        let header = try HeaderParser().parse(out) else return LoadError.Parse
+        let header = try parser.parse(out) else return LoadError.Parse
 
         return Ok(header)
     }
@@ -790,8 +989,10 @@ and transform efficiently.
 
 ## Classes And Interfaces
 
-`class` is for object, capability, adapter, and suite composition. Classes have
-identity and carry dependencies.
+`class` is for behavior, capability, adapter, and suite composition. A class
+must define at least one method or test declaration. Class fields are immutable
+after construction: methods can mutate the state behind owned fields through
+`mut self`, but cannot rebind fields.
 
 ```wrela
 interface BlockDevice {
@@ -811,6 +1012,10 @@ class VirtioBlockDevice implements BlockDevice {
 
 Classes are not the default representation for bulk records. If there are many
 items of the same logical shape, prefer `data` plus `Table`.
+
+Interfaces are static compile-time contracts. A method constrained by an
+interface is statically resolved or monomorphized; it does not use an implicit
+runtime vtable or hidden dynamic dispatch object.
 
 ## Vectorization Diagnostics
 
@@ -866,6 +1071,10 @@ This design does not require:
 - Exceptions or hidden stack unwinding.
 - Ambient panic or process-exit behavior.
 - Top-level free functions.
+- Runtime vtables or implicit dynamic dispatch for interfaces.
+- Implicit copying of class values.
+- Mutable class-field rebinding after construction.
+- Long-lived `mut` dependency fields in the initial language.
 - Ambient heap allocation.
 - General-purpose garbage collection or free.
 - Built-in unbounded hash maps.
@@ -876,9 +1085,14 @@ This design does not require:
 The first language nucleus should include:
 
 - `module` and explicit `use` imports.
-- `interface` for behavior contracts.
+- static `interface` contracts with no implicit runtime vtables.
 - `class` for capability-carrying objects and adapters.
 - class methods as the only ordinary callable function form.
+- explicit receiver modes: `read self`, `mut self`, and `own self`.
+- immutable class field bindings after construction.
+- class values that move by default, with shared dependencies declared as
+  `read`.
+- `unique class` for authority-bearing owners with graph checks.
 - `match` as the core exhaustive scalar branching form.
 - `return` as an explicit keyword in normal control flow.
 - `Option[T]`, `Result[T, E]`, and closed `error` sums.
@@ -909,6 +1123,9 @@ The next design pass should settle:
 - How table row iteration works without exposing row addresses.
 - How table columns interact with ownership and borrowing.
 - How masked writes report or forbid overlapping aliases.
+- Exact lifetime notation and diagnostics for `read` fields and borrowed class
+  dependencies.
+- Whether any class field mode beyond owned and `read` should exist after v1.
 - Exact arena type names for root, executor, driver, DMA, table, cache, and
   scratch memory.
 - Exact trap report payload for OOM and capacity violations.
