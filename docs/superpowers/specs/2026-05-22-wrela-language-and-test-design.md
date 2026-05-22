@@ -1,4 +1,4 @@
-# Language Primitives and Data Layout Design
+# Wrela Language And Test Design
 
 Date: 2026-05-22
 
@@ -6,8 +6,8 @@ Date: 2026-05-22
 
 Wrela is an AArch64-only systems language for building complete appliance
 images. The language should make machine authority, memory ownership, data
-layout, and hot data paths visible to the compiler without turning all code
-into assembly or compiler folklore.
+layout, test execution, and hot data paths visible to the compiler without
+turning all code into assembly or compiler folklore.
 
 This design captures the initial shape of the language nucleus:
 
@@ -50,7 +50,8 @@ The explicit test-suite model depends on these language primitives:
 - `with` fixtures for test-local fake construction.
 - Explicit root images that import and construct suite classes.
 
-This document focuses on the broader language shape underneath that test model.
+This document defines the language shape and the explicit hosted/QEMU test model
+as one integrated design.
 
 ## No Top-Level Functions
 
@@ -1637,6 +1638,399 @@ Linker and image layout should be controlled by root-owned declarations:
 named memory regions, sections, stacks, arenas, DMA regions, and boot entry
 points.
 
+## Test Execution Model
+
+Wrela needs a permanent local test story without weakening its central model:
+there are no ambient syscalls, no ambient linking, and no hidden dependency
+graph. The same language should support fast tests on a development machine and
+machine-level tests under QEMU while every capability still flows from a visible
+root image.
+
+If code runs, it is reachable from the root image. If code has power, the root
+image granted it. Tests follow the same rule:
+
+- Test suites are explicitly imported by the image root.
+- Test suites are explicitly constructed by the image root.
+- Test suites receive capabilities through constructor fields.
+- Test blocks derive local fakes and fixtures from those suite capabilities.
+- The runner executes already-constructed suites.
+- The compiler may understand tests specially, but it does not smuggle tests,
+  profiles, or host dependencies into the graph.
+
+### Test Profiles
+
+Wrela keeps a hosted profile permanently so unit and integration tests can run
+quickly on the developer machine.
+
+The major profiles are:
+
+- `host image`: Builds a native executable for the development OS. It can
+  access host-backed capabilities only through a unique host authority value.
+- `image`: Builds a freestanding appliance or machine image. It can access
+  hardware-backed capabilities only through platform authority discovered during
+  boot.
+
+The same generic test suite class can run in either profile when both roots can
+provide concrete capability values satisfying the static interfaces it requires.
+
+### Test Capability Interfaces
+
+Tests should depend on behavior-shaped static interfaces, not
+operating-system-shaped globals. Examples include:
+
+- `Console`
+- `Clock`
+- `Memory`
+- `BlockDevice`
+- `ReadOnlyDirectory`
+- `TempDirectory`
+- `EntropySource`
+
+Hosted roots can satisfy these with macOS-backed adapters. QEMU roots can
+satisfy them with UARTs, architectural timers, claimed physical memory, virtio
+devices, or other boot-visible hardware capabilities.
+
+An interface name is used as a generic constraint, not as a hidden runtime
+object. A suite that needs a console is shaped as `RingBufferTests<C: Console>`
+with a field `console: C`.
+
+Broad ambient interfaces such as a full `Filesystem` should be avoided unless
+the test genuinely needs that authority. Prefer narrower capabilities such as a
+read-only fixture directory or temporary scratch directory.
+
+### Hosted Test Root
+
+A hosted test root receives a unique host authority and narrows it into
+explicit capabilities:
+
+```wrela
+use { RingBufferTests } from tests.ring_buffer
+use { StorageTests } from tests.storage
+
+host image HostTests {
+    phase run(host: unique MacOSHost) {
+        let console = host.stdout()
+        let clock = host.monotonic_clock()
+        let memory = host.test_arena(bytes: 64 * MiB)
+
+        let runner = TestRunner(
+            console = console,
+            clock = clock,
+        )
+
+        runner.run([
+            RingBufferTests(console = console),
+            StorageTests(console = console, memory = memory),
+        ])
+
+        return None
+    }
+}
+```
+
+The host root is the only place where `MacOSHost` appears. Normal test suites
+receive narrower concrete capabilities constrained by interfaces such as
+`Console`, `Clock`, or `Memory`.
+
+### QEMU Test Root
+
+A QEMU test image wires the same suite classes to machine-backed capabilities:
+
+```wrela
+use { RingBufferTests } from tests.ring_buffer
+use { StorageTests } from tests.storage
+
+image QemuTests target QemuVirtPlatform {
+    phase boot(platform: unique QemuVirtPlatform) {
+        let console = UartConsole(platform.uart0.claim())
+        let clock = GenericTimerClock(platform.timer.claim())
+        let memory = BumpArena(platform.memory.claim_region(name = "test_heap"))
+
+        let runner = TestRunner(
+            console = console,
+            clock = clock,
+        )
+
+        runner.run([
+            RingBufferTests(console = console),
+            StorageTests(console = console, memory = memory),
+        ])
+
+        return None
+    }
+}
+```
+
+The runner and suites are the same conceptual code. Only the root authority and
+capability implementations change.
+
+### Test Suite Classes
+
+A test suite is a class with one or more `test` declarations. The class carries
+its dependencies as fields. There is no required `name()` method and no explicit
+registration method such as `runner.add`.
+
+```wrela
+module tests.ring_buffer
+
+pub class RingBufferTests<C: Console> {
+    console: C
+
+    test "ring buffer correctly wraps" {
+        let buffer = RingBuffer[U8](capacity = 4)
+
+        buffer.push(1).unwrap()
+        buffer.push(2).unwrap()
+        buffer.push(3).unwrap()
+        buffer.push(4).unwrap()
+
+        let first_is_one = buffer.pop().unwrap() == 1
+        assert value first_is_one
+
+        buffer.push(5).unwrap()
+
+        let second_is_two = buffer.pop().unwrap() == 2
+        let third_is_three = buffer.pop().unwrap() == 3
+        let fourth_is_four = buffer.pop().unwrap() == 4
+        let fifth_is_five = buffer.pop().unwrap() == 5
+
+        assert value second_is_two
+        assert value third_is_three
+        assert value fourth_is_four
+        assert value fifth_is_five
+    }
+}
+```
+
+The compiler treats `test` as a declaration form. It can generate metadata and
+dispatch for the runner, typecheck assertion behavior, and ensure only test
+suites are passed to `TestRunner.run`.
+
+### Test-Local Fixtures
+
+Each test can declare local fakes or fixtures up front. These fixture
+expressions are evaluated fresh for that test and can use the suite fields.
+
+```wrela
+module tests.storage
+
+class InMemoryBlockDevice<M: Memory> implements BlockDevice {
+    memory: M
+    blocks: U32
+    storage: BlockArray
+
+    constructor(memory: M, blocks: U32) {
+        return Self(
+            memory = memory,
+            blocks = blocks,
+            storage = BlockArray.allocate(memory = memory, blocks = blocks),
+        )
+    }
+
+    fn read(mut self, index: U32) -> Result[Block, DiskError] {
+        match index >= blocks {
+            true => return Err(DiskError.OutOfRange)
+            false => return Ok(storage[index])
+        }
+    }
+
+    fn write(mut self, index: U32, block: Block) -> Result[None, DiskError] {
+        match index >= blocks {
+            true => return Err(DiskError.OutOfRange)
+            false => {
+                storage[index] = block
+                return Ok(None)
+            }
+        }
+    }
+}
+
+class FaultInjectingBlockDevice<D: BlockDevice> implements BlockDevice {
+    inner: D
+    fail_after_writes: U32
+    writes: U32
+
+    constructor(inner: D, fail_after_writes: U32) {
+        return Self(
+            inner = inner,
+            fail_after_writes = fail_after_writes,
+            writes = 0,
+        )
+    }
+
+    fn read(mut self, index: U32) -> Result[Block, DiskError] {
+        return inner.read(index = index)
+    }
+
+    fn write(mut self, index: U32, block: Block) -> Result[None, DiskError] {
+        match writes >= fail_after_writes {
+            true => return Err(DiskError.InjectedFailure)
+            false => {
+                writes += 1
+                return inner.write(index, block)
+            }
+        }
+    }
+}
+
+pub class StorageTests<C: Console, M: Memory> {
+    console: C
+    memory: M
+
+    test "writes and reads one block"
+        with disk = InMemoryBlockDevice(memory = memory, blocks = 1024)
+    {
+        let block = Block.filled(0xaa)
+
+        disk.write(0, block).unwrap()
+
+        let block_round_trips = disk.read(0).unwrap() == block
+        assert value block_round_trips
+    }
+
+    test "propagates write failure"
+        with disk = FaultInjectingBlockDevice(
+            inner = InMemoryBlockDevice(memory = memory, blocks = 1024),
+            fail_after_writes = 0,
+        )
+    {
+        let block = Block.filled(0xaa)
+
+        let propagates_failure = disk.write(0, block).is_error()
+        assert value propagates_failure
+    }
+}
+```
+
+This keeps fake construction close to the tests that need it without bloating
+the image root. Test-local fakes are module-private by default unless exported.
+
+### Assertions
+
+Wrela tests should not have a generic `assert expr` form. Assertions must state
+which kind of equality or claim is being checked.
+
+Initial assertion forms:
+
+- `assert value claim`: checks a named value-equality or value-shaped boolean
+  claim.
+- `assert same claim`: checks a named identity claim: the same class instance,
+  authority, storage identity, or identity-bearing capability.
+
+Examples:
+
+```wrela
+test "services share parser identity" {
+    let parser = HeaderParser(limits = limits)
+    let service_a = SharedServiceA(parser = read parser)
+    let service_b = SharedServiceB(parser = read parser)
+
+    let share_parser = service_a.parser == service_b.parser
+    assert same share_parser
+}
+
+test "parsed header matches expected value" {
+    let actual = parser.parse(bytes).unwrap()
+    let expected = Header(version = 1, length = 32)
+
+    let header_matches = actual == expected
+    assert value header_matches
+}
+```
+
+Assertion failure is a test failure, not a trap. A trap inside a test is
+reported separately as abnormal failure.
+
+The assertion mode is part of typechecking:
+
+- `assert value` is valid for scalar, enum, error, and `data` value claims.
+- `assert same` is valid for classes, unique authorities, borrowed class
+  references, and other identity-bearing capabilities.
+- `assert same` is invalid for pure `data` values unless a future explicit
+  handle type gives them identity.
+
+### Runner Semantics
+
+`TestRunner` is ordinary Wrela code plus a compiler-known call surface. It does
+not discover source files, compile tests, or grant authority.
+
+The runner receives:
+
+- Its own concrete reporting capabilities constrained by interfaces such as
+  `Console` and `Clock`.
+- A list of already-constructed suite values.
+
+`TestRunner` should follow the same static-interface rule as suites. A runner
+with reporting dependencies is generic over concrete capability types rather
+than storing interface-typed fields.
+
+The runner performs:
+
+- Iteration over compiler-known tests in each suite class.
+- Per-test fixture setup.
+- Test execution.
+- Failure, assertion, trap, timeout, and summary reporting.
+
+The runner does not perform:
+
+- Source scanning.
+- Runtime compilation.
+- Automatic imports.
+- Host or platform capability construction.
+
+Runner summaries should be ordinary data:
+
+```wrela
+data TestSummary {
+    passed: U32
+    failed: U32
+    trapped: U32
+    timed_out: U32
+}
+```
+
+Hosted process-exit mapping belongs in the hosted root, not inside suites.
+
+### Test Typechecking And Dependency Graph
+
+The compiler enforces the test model with these rules:
+
+- `test` declarations are valid only in test-capable containers, initially
+  classes.
+- A class with at least one `test` declaration is a test suite.
+- `TestRunner.run(suites)` accepts only values whose classes contain test
+  metadata.
+- A test body can access suite fields and its own `with` fixtures.
+- A `with` fixture expression can use suite fields and earlier fixtures from the
+  same test declaration.
+- A `with` fixture is created fresh per test execution and destroyed after that
+  test completes.
+- Host authority roots such as `MacOSHost` and platform roots such as
+  `QemuVirtPlatform` should not be passed into suites. Suites should receive
+  narrowed capabilities.
+- `assert value` accepts only value-shaped claims.
+- `assert same` accepts only identity-bearing claims.
+
+The image file is the test manifest. It explicitly imports suite classes and
+constructs suite instances. There is no profile-based test discovery, no
+`include profiles [host]`, and no compiler-injected manifest from arbitrary
+source roots.
+
+The compiler may generate internal metadata for suite classes that are already
+reachable through imports, but it does not add new graph edges.
+
+This design accepts a small amount of root ceremony to keep authority explicit.
+The root lists suites, not every test case. Test-local fakes live beside the
+tests. Different roots can instantiate the same suite class with different
+capability implementations.
+
+This gives the project a clean testing ladder:
+
+- Pure tests use suites with no capabilities or only local data.
+- Hosted integration tests use macOS-backed capabilities and test-local fakes.
+- QEMU machine tests use hardware-backed capabilities.
+- Real appliance tests can use the same suite pattern where practical.
+
 ## Classes And Interfaces
 
 `class` is for behavior, capability, adapter, and suite composition. A class
@@ -1727,6 +2121,7 @@ This design does not require:
 - Runtime vtables or implicit dynamic dispatch for interfaces.
 - Runtime generic dictionaries or hidden type metadata for generics.
 - Interface-typed fields as implicit existential objects.
+- Interface-typed suite fields or hidden runtime capability objects.
 - Developer-authored effect or permission clauses for privileged operations.
 - Pointer arithmetic or raw memory dereference outside unique authority.
 - Assembly functions outside unique authority.
@@ -1739,6 +2134,12 @@ This design does not require:
 - Initial sugar over `Index + Table`.
 - Broad C interop in v1.
 - Wildcard imports in v1.
+- Automatic source discovery for tests.
+- Runtime compilation for tests.
+- A hidden hosted standard library.
+- Ambient filesystem, stdout, clock, allocator, or process access.
+- A requirement that all tests be runnable under every profile.
+- A generic `assert expr` form.
 
 ## Initial Language Shape
 
@@ -1803,6 +2204,11 @@ The next design pass should still settle:
 - Exact diagnostic shape for inferred effects and authority sources.
 - Exact built-in generic constraint names beyond the initial capitalized set.
 - Whether later backends share code between compatible generic instantiations.
+- Whether `test` declarations are allowed only in classes or also modules.
+- Exact diagnostic payloads for `assert value` and `assert same` failures.
+- Exact hosted process exit mapping for `TestSummary`.
+- How heterogeneous lists of generic test suite instances are represented
+  without runtime interface objects.
 - Exact arena type names for root, executor, driver, DMA, table, cache, and
   scratch memory.
 - Exact `TrapCode` cases for OOM, capacity violations, bounds failures, and
