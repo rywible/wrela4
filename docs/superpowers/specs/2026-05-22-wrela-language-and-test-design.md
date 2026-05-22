@@ -485,6 +485,39 @@ comes from ownership of the instance and from the platform's proof that
 `core0` names a distinct hardware core, not from making `CoreExecutor` a unique
 class.
 
+Hosted images use the same ownership shape but not the same hardware meaning.
+`MacOSHost` does not pretend to expose appliance CPU cores. It can mint
+host-backed executor lanes for testing and tools, and those lanes are ordinary
+owned scheduling capabilities backed by the host process, host threads, worker
+processes, or another explicit hosted implementation.
+
+```wrela
+interface ExecutorLane {
+    fn submit(mut self, job: TestJob) -> Result[None, ExecutorError]
+    fn join(mut self) -> Result[TestResult, ExecutorError]
+}
+
+class MacOSTestLane implements ExecutorLane {
+    worker: HostWorker
+
+    fn submit(mut self, job: TestJob) -> Result[None, ExecutorError] {
+        return worker.submit(job = job)
+    }
+
+    fn join(mut self) -> Result[TestResult, ExecutorError] {
+        return worker.join()
+    }
+}
+```
+
+The portable surface is the executor-lane interface. Under a host image, a lane
+is a host scheduling path. Under a machine image, a lane can be backed by a
+claimed core path plus a moved `CoreExecutor` instance. Code that only needs
+parallel test or tool execution should depend on the lane interface. Code that
+needs real boot-time core placement, interrupt routing, cache policy, or CPU
+bring-up should depend on platform core paths and should not be considered
+portable to a host image.
+
 ## Authority-Gated Machine Effects
 
 Privileged behavior comes from authority in the object graph, not from
@@ -1792,6 +1825,7 @@ operating-system-shaped globals. Examples include:
 - `ReadOnlyDirectory`
 - `TempDirectory`
 - `EntropySource`
+- `ExecutorLane`
 
 Hosted roots can satisfy these with macOS-backed adapters. QEMU roots can
 satisfy them with UARTs, architectural timers, claimed physical memory, virtio
@@ -2104,7 +2138,8 @@ Test execution can be parallelized without changing the authority model. The
 serial runner remains the baseline. Parallel execution is available only when
 the root gives the runner explicit executor lanes.
 
-A hosted root can derive host-backed test executor lanes from `MacOSHost`. A
+A hosted root can derive host-backed test executor lanes from `MacOSHost`. Those
+lanes are explicit host scheduling capabilities, not fake appliance cores. A
 QEMU root can claim core paths, construct one ordinary `CoreExecutor` instance
 per core, and give the runner a lane set backed by those executors. In both
 profiles, the runner receives concrete values; it does not discover a thread
@@ -2142,6 +2177,11 @@ Parallel runner rules:
   explicitly supplied lane values.
 - A lane is an ordinary owned class instance or lane-set class, usually minted
   by a unique host/platform authority or by a claimed core path.
+- Host-backed lanes satisfy executor-lane interfaces for tests and tools, but
+  they do not grant boot-time core placement, interrupt routing, cache policy,
+  or CPU bring-up authority.
+- QEMU/core-backed lanes can carry those machine meanings only when the root
+  created them from platform core paths.
 - Each test still receives fresh `with` fixtures.
 - Tests within the same suite instance are serialized if they need mutable
   access to suite state.
@@ -2382,6 +2422,8 @@ The next design pass should still settle:
 - Exact diagnostic payloads for `assert value` and `assert same` failures.
 - Exact hosted process exit mapping for `TestSummary`.
 - Exact parallel test lane API and deterministic timeout/reporting behavior.
+- Exact hosted executor-lane implementation and isolation policy: host threads,
+  worker processes, or another explicit hosted mechanism.
 - How heterogeneous lists of generic test suite instances are represented
   without runtime interface objects.
 - Exact arena type names for root, executor, driver, DMA, table, cache, and
