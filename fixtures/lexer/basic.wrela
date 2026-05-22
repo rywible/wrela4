@@ -1,0 +1,8 @@
+use { Console } from app.console
+
+class RingBufferTests {
+    test "wraps" {
+        let capacity = 64
+        return None
+    }
+}
