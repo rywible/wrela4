@@ -90,6 +90,8 @@ host image HostTests {
             RingBufferTests(console = console),
             StorageTests(console = console, memory = memory),
         ])
+
+        return None
     }
 }
 ```
@@ -120,6 +122,8 @@ image QemuTests {
             RingBufferTests(console = console),
             StorageTests(console = console, memory = memory),
         ])
+
+        return None
     }
 }
 ```
@@ -176,7 +180,7 @@ class InMemoryBlockDevice implements BlockDevice {
     storage: BlockArray
 
     constructor(memory: Memory, blocks: UInt) {
-        Self(
+        return Self(
             memory = memory,
             blocks = blocks,
             storage = BlockArray.allocate(memory = memory, blocks = blocks),
@@ -184,20 +188,20 @@ class InMemoryBlockDevice implements BlockDevice {
     }
 
     fn read(index: UInt) -> Result[Block, DiskError] {
-        if index >= blocks {
-            return Err(DiskError.OutOfRange)
+        match index >= blocks {
+            true => return Err(DiskError.OutOfRange)
+            false => return Ok(storage[index])
         }
-
-        Ok(storage[index])
     }
 
     fn write(index: UInt, block: Block) -> Result[None, DiskError] {
-        if index >= blocks {
-            return Err(DiskError.OutOfRange)
+        match index >= blocks {
+            true => return Err(DiskError.OutOfRange)
+            false => {
+                storage[index] = block
+                return Ok(None)
+            }
         }
-
-        storage[index] = block
-        Ok(None)
     }
 }
 
@@ -207,12 +211,13 @@ class FaultInjectingBlockDevice implements BlockDevice {
     writes: UInt = 0
 
     fn write(index: UInt, block: Block) -> Result[None, DiskError] {
-        if writes >= fail_after_writes {
-            return Err(DiskError.InjectedFailure)
+        match writes >= fail_after_writes {
+            true => return Err(DiskError.InjectedFailure)
+            false => {
+                writes += 1
+                return inner.write(index, block)
+            }
         }
-
-        writes += 1
-        inner.write(index, block)
     }
 }
 
@@ -261,7 +266,7 @@ The runner performs:
 - Iteration over compiler-known tests in each suite class.
 - Per-test fixture setup.
 - Test execution.
-- Failure, assertion, panic, timeout, and summary reporting.
+- Failure, assertion, trap, timeout, and summary reporting.
 
 The runner does not perform:
 
@@ -332,7 +337,7 @@ The following language primitives still need to be designed:
 - Whether `test` declarations are allowed only in classes or also modules.
 - How `with` fixture lifetimes interact with ownership and borrowing.
 - How assertions are represented in the type system.
-- How test failures differ from panics or traps.
+- How test failures differ from traps and fault-policy reports.
 - How runner result reporting is modeled without hidden process exit behavior.
 - How arrays of heterogeneous test suites are represented.
 

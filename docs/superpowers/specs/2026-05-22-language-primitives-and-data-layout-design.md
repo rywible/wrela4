@@ -12,6 +12,9 @@ into assembly or compiler folklore.
 This design captures the initial shape of the language nucleus:
 
 - Scalar control and authority code remains explicit and readable.
+- Scalar branching uses exhaustive `match`, not a generic `if`.
+- Normal functions and phases use explicit `return`.
+- Recoverable errors are typed values, not exceptions.
 - Bulk logical data is columnar by default.
 - Tables and masks provide the primary vector-friendly programming model.
 - Fixed vector types and AArch64 intrinsics remain available for sharp kernels.
@@ -53,6 +56,8 @@ image PacketAppliance
     phase boot(platform: unique QemuVirt) {
         let console = UartConsole(platform.uart0.claim())
         console.write("packet appliance booted")
+
+        return None
     }
 }
 ```
@@ -87,6 +92,260 @@ Vector-friendly code is mostly data-plane work:
 
 The language should make vectorizable regions easy to express without making
 the entire program graph pretend to be SIMD.
+
+## Scalar Control Flow
+
+Wrela should not have a generic `if` statement in the core language. Scalar
+branching is expressed with exhaustive `match`.
+
+`Bool` is a closed two-case type:
+
+```wrela
+fn choose_executor(ready: Bool, fast: Executor, idle: Executor) -> Executor {
+    match ready {
+        true => return fast
+        false => return idle
+    }
+}
+```
+
+Closed sums must handle every case:
+
+```wrela
+fn handle_status(status: DeviceStatus) -> Result[None, DeviceError] {
+    match status {
+        DeviceStatus.Ready => return Ok(None)
+        DeviceStatus.Busy => return Err(DeviceError.Retry)
+        DeviceStatus.Gone => return Err(DeviceError.DeviceGone)
+    }
+}
+```
+
+Open numeric domains can use ranges and a fallback arm when the input space is
+not statically enumerable:
+
+```wrela
+fn decode_status(raw: U32) -> DeviceStatus {
+    match raw {
+        0 => return DeviceStatus.Ready
+        1 => return DeviceStatus.Busy
+        2..=15 => return DeviceStatus.Recoverable(raw)
+        _ => return DeviceStatus.Unknown(raw)
+    }
+}
+```
+
+The split is:
+
+- `match` handles scalar and stateful control flow.
+- `Mask` handles table-wide data-parallel control flow.
+
+This keeps state handling exhaustive while leaving vectorizable bulk decisions
+in the table/mask model.
+
+## Return
+
+`return` is a keyword and should be used explicitly in functions, phases, and
+expanded error handlers. Wrela should not rely on implicit final-expression
+returns.
+
+```wrela
+fn add(a: U32, b: U32) -> U32 {
+    return a + b
+}
+
+fn mark_seen(flags: Flags) -> Flags {
+    return flags.set(Flag.Seen)
+}
+```
+
+Functions that produce no useful value return `None` explicitly:
+
+```wrela
+fn write_banner(console: Console) -> None {
+    console.write("ready")
+
+    return None
+}
+```
+
+## Error Values
+
+Recoverable failures are values. Wrela should not have exceptions, hidden
+unwinding, implicit process exit, or ambient panic behavior.
+
+The core recoverable forms are:
+
+- `Option[T]` for absence.
+- `Result[T, E]` for expected failure.
+- Closed `error` sums for typed failure domains.
+
+Example:
+
+```wrela
+error DiskError {
+    Timeout
+    BadBlock(index: U64)
+    DeviceGone
+}
+
+error HeaderError {
+    BadMagic
+    UnsupportedVersion(version: U16)
+    Truncated
+}
+
+error LoadError {
+    Disk(error: DiskError)
+    Parse(error: HeaderError)
+    BadMagic
+    UnsupportedVersion(version: U16)
+    Truncated
+}
+```
+
+Callers handle errors with exhaustive `match` when policy differs by case:
+
+```wrela
+fn read_required(disk: BlockDevice, index: U64, out: Buffer[U8]) -> Result[None, LoadError] {
+    match disk.read(index, out) {
+        Ok(_) => return Ok(None)
+        Err(DiskError.Timeout) => return Err(LoadError.Disk(DiskError.Timeout))
+        Err(DiskError.BadBlock(block)) => return Err(LoadError.Disk(DiskError.BadBlock(block)))
+        Err(DiskError.DeviceGone) => return Err(LoadError.Disk(DiskError.DeviceGone))
+    }
+}
+```
+
+Adding a new `DiskError` case should force relevant matches to update.
+
+## Try Else
+
+`try` is explicit early-return sugar over `Result`. It is not an exception and
+does not unwind.
+
+When the source error type matches the enclosing function's error type, plain
+`try` is valid:
+
+```wrela
+fn flush_all(disk: BlockDevice) -> Result[None, DiskError] {
+    try disk.flush()
+
+    return Ok(None)
+}
+```
+
+The inline mapped form uses `else return` so the control flow is visible:
+
+```wrela
+fn load_header(disk: BlockDevice, out: Buffer[U8]) -> Result[Header, LoadError] {
+    try disk.read(0, out) else return LoadError.Disk
+
+    let header = try parse_header(out) else return LoadError.Parse
+
+    return Ok(header)
+}
+```
+
+The inline mapped form means:
+
+```text
+on Ok(value), evaluate to value
+on Err(err), return Err(Constructor(err)) from the current function
+```
+
+The constructor in `else return Constructor` must accept the source error. If a
+caller wants to discard or inspect the source error, it must use the expanded
+form.
+
+The expanded form binds the source error and requires the block to diverge with
+`return`, `trap`, or another `Never`-returning expression:
+
+```wrela
+fn load_header_checked(bytes: Buffer[U8]) -> Result[Header, LoadError] {
+    let header = try parse_header(bytes) else err {
+        match err {
+            HeaderError.BadMagic => return Err(LoadError.BadMagic)
+            HeaderError.UnsupportedVersion(version) => {
+                return Err(LoadError.UnsupportedVersion(version))
+            }
+            HeaderError.Truncated => return Err(LoadError.Truncated)
+        }
+    }
+
+    return Ok(header)
+}
+```
+
+This gives Wrela three levels of error handling:
+
+- `match` for full policy.
+- `try expr` for same-error propagation.
+- `try expr else return Constructor` or `try expr else err { ... }` for explicit
+  mapping.
+
+## Trap And Fault Policy
+
+A `trap` is not a recoverable error. It is an explicit transition out of normal
+program semantics and has type `Never`.
+
+Use traps for:
+
+- Violated invariants.
+- Impossible states.
+- Bounds failures that cannot be represented as `Result`.
+- Security stops.
+- Compiler-inserted checks whose failure means normal execution cannot
+  continue.
+
+Example:
+
+```wrela
+fn trusted_header(bytes: Buffer[U8]) -> Header {
+    match parse_header(bytes) {
+        Ok(header) => return header
+        Err(HeaderError.BadMagic) => trap("trusted header parser failed: bad magic")
+        Err(HeaderError.UnsupportedVersion(_)) => trap("trusted header parser failed: version")
+        Err(HeaderError.Truncated) => trap("trusted header parser failed: truncated")
+    }
+}
+```
+
+Hosted execution should route traps to the hosted test/runtime trap handler,
+report source location and reason, and exit the process with failure.
+
+Appliance execution should route traps through an image-installed fault policy
+when one exists. Without an installed policy, the conservative behavior is to
+halt the current executor or image.
+
+Fault policy is root-owned authority:
+
+```wrela
+interface FaultPolicy {
+    fn fatal(reason: TrapReport) -> Never
+}
+
+image QemuTests {
+    phase boot(platform: unique QemuVirt) {
+        let console = UartConsole(platform.uart0.claim())
+        let runtime = platform.runtime.claim()
+        let faults = SerialFaultPolicy(console = console)
+
+        runtime.install_fault_policy(faults)
+
+        run_tests(console = console)
+
+        return None
+    }
+}
+```
+
+Traps, hardware exceptions, and `Result` errors are distinct:
+
+- `Result` is expected and typed.
+- `trap` is deliberate abnormal termination of normal semantics.
+- Hardware exceptions are machine events that may be reported through fault
+  policy when the platform can do so.
 
 ## Logical Data
 
@@ -180,10 +439,12 @@ compiler a columnar, predicated lowering target.
 Example:
 
 ```wrela
-fn mark_ready(timers: Table[TimerEntry], now: Tick) {
+fn mark_ready(timers: Table[TimerEntry], now: Tick) -> None {
     let expired = timers.deadline <= now
 
     timers.state[expired] = TimerState.Ready
+
+    return None
 }
 ```
 
@@ -197,7 +458,7 @@ lanes matter.
 
 ```wrela
 fn xor_block(a: Vec[16, U8], b: Vec[16, U8]) -> Vec[16, U8] {
-    a ^ b
+    return a ^ b
 }
 ```
 
@@ -228,7 +489,7 @@ use arch.aarch64.neon
 fn checksum_step(input: Vec[16, U8]) -> Vec[8, U16]
     requires cpu.adv_simd
 {
-    neon.uaddlp(input)
+    return neon.uaddlp(input)
 }
 ```
 
@@ -303,7 +564,7 @@ class VirtioBlockDevice implements BlockDevice {
     queue: unique VirtioQueue
 
     fn read(index: U64, out: Buffer[U8]) -> Result[None, DiskError] {
-        queue.submit_read(index = index, out = out)
+        return queue.submit_read(index = index, out = out)
     }
 }
 ```
@@ -319,18 +580,22 @@ explain when a table/mask operation lowered cleanly and when it did not.
 Possible diagnostic modes:
 
 ```wrela
-fn classify(packets: Table[Packet])
+fn classify(packets: Table[Packet]) -> None
     vectorize diagnose
 {
     let valid = packets.flags.has(PacketFlag.Valid)
     packets.flags[valid].set(PacketFlag.Checked)
+
+    return None
 }
 
-fn classify_fast(packets: Table[Packet])
+fn classify_fast(packets: Table[Packet]) -> None
     vectorize require
 {
     let large = packets.len > 1200
     packets.flags[large].set(PacketFlag.Jumbo)
+
+    return None
 }
 ```
 
@@ -355,6 +620,9 @@ This design does not require:
 - Assembly for ordinary table operations.
 - Array-of-structs layout for logical bulk data.
 - Host-specific SIMD behavior hidden behind the test runner.
+- Generic `if` as a separate core branching primitive.
+- Exceptions or hidden stack unwinding.
+- Ambient panic or process-exit behavior.
 
 ## Initial Language Shape
 
@@ -363,6 +631,11 @@ The first language nucleus should include:
 - `module` and explicit `use` imports.
 - `interface` for behavior contracts.
 - `class` for capability-carrying objects and adapters.
+- `match` as the core exhaustive scalar branching form.
+- `return` as an explicit keyword in normal control flow.
+- `Option[T]`, `Result[T, E]`, and closed `error` sums.
+- `try`, `try else return`, and expanded `try else err { ... }`.
+- `trap` as a `Never`-typed abnormal control-flow boundary.
 - `data` for logical records.
 - `Table[T]` for columnar bulk logical data.
 - `Mask` for row selection and predication.
@@ -389,3 +662,8 @@ The next design pass should settle:
 - How vectorization requirements are declared on functions, stages, or images.
 - Whether Wrela should have first-class `pipeline` or `stage` declarations in
   addition to table/mask operations.
+- Whether `match` is only statement-shaped or can also produce values in
+  limited contexts.
+- Exact syntax for trap reports and source-location payloads.
+- How image-installed fault policies interact with executor-local failures and
+  whole-image halt/reboot behavior.
