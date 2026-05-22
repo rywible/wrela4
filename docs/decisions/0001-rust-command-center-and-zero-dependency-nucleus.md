@@ -51,6 +51,10 @@ sets the project philosophy:
   that.
 - The first backend should avoid heavyweight compiler framework dependencies.
 - Dependencies are pulled in by demonstrated pain, not by niceness.
+- The compile pipeline is shaped for maximum parallelism and minimum necessary
+  passes.
+- The lexer is lossless and preserves trivia for formatting, diagnostics, and
+  later tooling.
 
 This includes popular and high-quality crates. `clap`, `serde`, `anyhow`,
 `thiserror`, `miette`, parser generators, snapshot testing crates, async
@@ -109,6 +113,132 @@ parser generators, diagnostics frameworks, or large utility ecosystems. Wrela's
 first backend is AArch64-only, so early code generation can be deliberately
 narrow and direct.
 
+## Compile Pipeline Philosophy
+
+Wrela should compile like a parallel graph, not like a ceremonial sequence of
+compiler passes.
+
+The pipeline should be as parallel as possible in as few passes as possible.
+"Few passes" does not mean one giant pass. It means every phase must earn its
+place by doing at least one of these jobs:
+
+- exposing parallel work
+- making an invariant checkable
+- collapsing a graph boundary deterministically
+- preparing code or data for execution, diagnostics, or image layout
+
+The compiler should avoid global mutable state. Each phase should receive
+explicit inputs and produce immutable artifacts plus diagnostics as data. Later
+phases consume those artifacts rather than mutating them in place.
+
+The preferred phase shape is:
+
+- parallel local work
+- immutable summary output
+- deterministic merge
+- more parallel local work
+
+Examples:
+
+- files lex into independent `LexedFile` artifacts
+- parsed modules produce independent export summaries
+- export summaries merge into a deterministic module/name graph
+- type and effect checks run over independent modules, items, or dependency
+  strongly connected components
+- monomorphized methods, kernels, and root phases lower independently
+- code generation emits independent object fragments
+- final image layout and linking perform the main unavoidable collapse
+
+The first implementation may execute serially. The important constraint is that
+the APIs remain parallel-shaped. A serial loop over files should be replaceable
+by a worker pool without changing the meaning of the compiler.
+
+Merges must be deterministic. Diagnostics, symbol tables, object fragments, and
+image sections should be ordered by stable source or graph IDs, not by thread
+completion order.
+
+## Build Modes
+
+Wrela has two compile modes: dev and release.
+
+Dev mode is for fast local work. It must emit correct code and enforce Wrela's
+semantics, including ownership, authority, effects, layout legality, and
+AArch64 correctness. Dev mode is not permissive. It simply avoids expensive
+global work that is not required for correctness.
+
+Dev mode should prioritize:
+
+- fast `wrela check`
+- fast `wrela test`
+- rich diagnostics
+- preserved source/trivia information
+- minimal optimization
+- early error reporting
+- incremental-friendly artifacts
+- correct but straightforward AArch64 output
+
+Release mode is for production appliance images. It performs the same semantic
+checks as dev mode, then spends additional budget where that budget buys
+shipping value.
+
+Release mode may perform:
+
+- deeper reachability pruning
+- stronger whole-image reports and checks
+- aggressive generic specialization
+- expensive vectorization and table/mask lowering
+- target-specific code generation decisions
+- function, section, memory, and image layout tuning
+- final linker/image maps
+- authority, memory, effect, and vectorization reports
+
+Release mode should still be parallel and fast, but it is allowed to do the
+expensive global work that would make dev mode feel heavy.
+
+## Lexer Philosophy
+
+The lexer should be lossless, file-local, deterministic, and embarrassingly
+parallel.
+
+Each source file should lex independently. The lexer should not require global
+state, module graph knowledge, import expansion, string interning, or access to
+other files. Its output should be a self-contained artifact containing:
+
+- semantic tokens
+- trivia
+- source spans
+- line-start information
+- recoverable lexer diagnostics
+
+Trivia must be preserved from the beginning. Whitespace, newlines, comments,
+and doc comments are source facts needed by formatters, diagnostics, editor
+tooling, and possible documentation tooling. The parser can consume a clean
+semantic token stream, but the compiler must keep enough trivia information to
+reconstruct source relationships later.
+
+The lexer should store spans into the original source rather than copying token
+or trivia text by default. Byte spans are the internal representation. Human
+line and column positions are derived from the file's line-start table when
+rendering diagnostics.
+
+The preferred model is:
+
+- semantic tokens in one stream
+- trivia in a separate stream
+- stable spans connecting both streams to the original source
+- doc comments represented as a distinct trivia kind
+- doc-comment attachment handled by parsing or later lowering, not by lexing
+
+Lexer errors should be recoverable. Invalid characters, malformed numeric
+literals, unterminated strings, and unterminated block comments should produce
+diagnostics while allowing the lexer to continue producing tokens where
+possible.
+
+The lexer output should be immutable. Later phases may reference it, but they
+should not mutate it. That keeps lexing safe to parallelize across files and
+keeps formatting and diagnostics from fighting the parser over ownership of
+source text.
+
 ## Consequences
 
 Benefits:
@@ -118,6 +248,11 @@ Benefits:
 - Small audit surface.
 - Fewer transitive maintenance surprises.
 - Compiler architecture stays visible while the language is still forming.
+- The compiler can become parallel without redesigning its phase boundaries.
+- Dev builds stay fast while release builds have room for deeper production
+  work.
+- Lossless lexing keeps formatting and diagnostics possible without re-lexing
+  or source reconstruction.
 - The tool's implementation philosophy matches Wrela's language philosophy:
   explicit authority, explicit dependency edges, and no ambient magic.
 
@@ -127,6 +262,11 @@ Costs:
 - CLI help and diagnostics will be simpler at first.
 - Some polish must wait.
 - The project must resist repeatedly rebuilding mature crates poorly.
+- More care is required to keep phase artifacts immutable and merge points
+  deterministic.
+- Preserving trivia increases lexer output size.
+- Dev and release modes must be tested against the same semantic rules so they
+  do not drift.
 
 The intended tradeoff is not permanent minimalism. It is delayed commitment.
 When a dependency becomes obviously worth it, Wrela should add it deliberately,
