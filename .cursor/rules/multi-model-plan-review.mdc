@@ -1,0 +1,18 @@
+---
+description: Require thermo-nuclear self-review then Claude + Codex external review before marking implementation plans complete
+alwaysApply: true
+---
+
+# Plan completion review gate
+
+When executing a plan from `docs/superpowers/plans/`:
+
+1. Read `.cursor/skills/multi-model-plan-review/SKILL.md` — especially **Strict sequencing** and **Autonomous review loops**
+2. **Phase A and Phase B must be separate assistant turns** on first pass (do not start Phase B in the same message as writing Phase A)
+3. Phase A: thermo-nuclear self review → write `*-review-self-thermonuclear.md` with `## Verdict: APPROVED`
+4. Phase B: `plan-review-check-phase-a.sh` → `plan-review.sh` (Claude + Codex in parallel)
+5. **Autonomous loops:** after any fix from Phase A or Phase B feedback, loop autonomously — fix → commit → re-run Phase A → re-run Phase B — until both phases pass. Do not ask the user to re-run or commit.
+6. Do not return until Phase A is APPROVED **and** Claude **and** Codex are both APPROVED
+7. **Phase C:** delete interim review artifacts from worktree → merge into main → remove worktree
+
+**Forbidden:** running `plan-review.sh` in the same turn as the initial Phase A write; stopping after a review-driven fix without looping to pass; re-running only one Phase B reviewer after fixes; committing interim review artifacts to `main`.
