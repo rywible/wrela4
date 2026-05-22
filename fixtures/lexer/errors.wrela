@@ -1,0 +1,6 @@
+class Broken {
+    test "bad string" {
+        let name = "unterminated
+        let bad = @
+    }
+}

@@ -1,0 +1,4 @@
+use { Console } from app.console
+use { Storage } from app.storage
+
+image Root {}

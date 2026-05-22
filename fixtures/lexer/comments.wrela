@@ -1,0 +1,8 @@
+/// suite docs
+class Commented {
+    // line comment
+    fn run(read self) -> None {
+        /* nested /* inner */ comment */
+        return None
+    }
+}
