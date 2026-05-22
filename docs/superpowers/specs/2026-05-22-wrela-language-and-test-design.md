@@ -33,8 +33,12 @@ This design captures the initial shape of the language nucleus:
 - Recoverable errors are typed values, not exceptions.
 - Privileged machine effects come from `unique class` authority, not
   developer-written permission annotations.
+- Effects are inferred and reported by the compiler; they are not handwritten
+  permission slips.
 - Memory is explicit authority, not an ambient allocator.
-- OOM and capacity violations trap by default.
+- Arena, frame, and raw memory capacity violations trap by default.
+- Table and index admission can return `Result` when capacity is part of normal
+  input policy.
 - Bulk logical data is columnar by default.
 - Tables and masks provide the primary vector-friendly programming model.
 - Fixed vector types and AArch64 intrinsics remain available for sharp kernels.
@@ -220,8 +224,8 @@ class SessionStore {
     by_id: Index[SessionId, 8192]
 
     fn insert(mut self, session: Session) -> None {
-        let row = sessions.insert(session)
-        by_id.insert(key = session.id, row = row)
+        let row = sessions.insert_or_trap(session)
+        by_id.insert_or_trap(key = session.id, row = row)
 
         return None
     }
@@ -335,9 +339,11 @@ regions:
 cannot store value from frame 'frame#2' into executor arena 'executor#0'
 ```
 
-Returning borrowed views should be allowed only when the return type clearly
-carries a lifetime from an input parameter. If that rule becomes hard to explain
-or diagnose, v1 should disallow returning borrowed views and add them later.
+V1 should not allow returning borrowed views from methods. Borrowed values can
+be passed down the call stack, but they cannot be returned, stored into
+long-lived state, published, or hidden in data. Returning borrowed views can be
+added later only with explicit lifetime syntax and diagnostics that make the
+source of the lifetime obvious.
 
 ## Primitive Types And Scalar Semantics
 
@@ -389,9 +395,23 @@ and driver paths. Use `unique class` only when the image graph should prove
 there is a single authority of that kind.
 
 For generic unique classes, the rule applies to each concrete specialization.
-Const generics are not a way to create many instances of the same root
-authority shape. If a unique authority needs to expose multiple resources, it
-should mint ordinary owned class instances that represent narrowed paths.
+Const generics are not a way for ordinary code to create many root instances of
+the same authority shape. A generic unique class may have const parameters only
+when those parameters describe static layout, feature set, or a parent-minted
+identity proof. If a unique authority needs to expose multiple resources, the
+parent unique authority must mint the child paths or child unique
+specializations. Ordinary root code cannot bypass the parent by directly
+instantiating `Driver[0]`, `Driver[1]`, and `Driver[2]`.
+
+Examples:
+
+- `PageTableBuilder[PageSize = 4096]` is acceptable when `PageSize` is layout
+  policy and there is still only one builder instance.
+- `CorePath[Id = 1]` is acceptable when it is minted by `PlatformCores.claim(id
+  = 1)`, not when arbitrary code constructs it directly.
+- `UartDriver[Id = 0]` and `UartDriver[Id = 1]` are invalid as a way to create
+  multiple root UART authorities unless a platform authority mints those
+  specializations from discovered hardware.
 
 Unique class instances move by default and cannot be copied. They can be
 borrowed with `read` or `mut` only when the capability type permits that
@@ -518,7 +538,7 @@ needs real boot-time core placement, interrupt routing, cache policy, or CPU
 bring-up should depend on platform core paths and should not be considered
 portable to a host image.
 
-## Authority-Gated Machine Effects
+## Authority-Gated Inferred Effects
 
 Privileged behavior comes from authority in the object graph, not from
 developer-written permission annotations. A method cannot opt into IO, raw
@@ -577,6 +597,12 @@ mutation effects. Hosted deterministic tests can reject time or entropy unless
 the root passes fake capabilities. Image diagnostics can list methods that may
 block in interrupt context.
 
+Effects propagate through ordinary calls, generic specializations, and static
+interface constraints. A generic method constrained by `D: BlockDevice` does
+not have one fixed effect summary in source. Each root-selected specialization
+inherits the effects of the concrete `D` it receives. The compiler reports
+those effects at the instantiated image graph, not as hidden runtime metadata.
+
 But developers do not write effect annotations as permission slips. If normal
 code needs privileged work, it must receive a narrowed explicit capability from
 the image graph.
@@ -621,6 +647,13 @@ class Loader<D: BlockDevice> {
 Dynamic dispatch, if Wrela ever needs it, must be an explicit value such as a
 declared dispatch table capability. It is not the default meaning of
 `interface`.
+
+The first language nucleus should tolerate generic specialization rather than
+adding runtime dispatch early. If dependency-heavy services make generic
+signatures unmanageable, the later escape hatch should be explicit dispatch:
+a root-constructed capability such as `dispatch Console` or a declared dispatch
+table value. That value would be visible in the root graph and would not make
+ordinary interface fields dynamic by default.
 
 ## Generics And Static Interfaces
 
@@ -677,8 +710,8 @@ class SessionStore<Rows: Const[U32], IndexSlots: Const[U32]> {
     by_id: Index[SessionId, IndexSlots]
 
     fn insert(mut self, session: Session) -> None {
-        let row = sessions.insert(session)
-        by_id.insert(key = session.id, row = row)
+        let row = sessions.insert_or_trap(session)
+        by_id.insert_or_trap(key = session.id, row = row)
 
         return None
     }
@@ -1057,13 +1090,14 @@ expanded error handlers. Wrela should not rely on implicit final-expression
 returns.
 
 ```wrela
-class Math {
-    fn add(read self, a: U32, b: U32) -> U32 {
-        return a + b
-    }
+class PacketLimits {
+    max_length: U32
 
-    fn mark_seen(read self, flags: Flags) -> Flags {
-        return flags.set(Flag.Seen)
+    fn clamp(read self, length: U32) -> U32 {
+        match length > max_length {
+            true => return max_length
+            false => return length
+        }
     }
 }
 ```
@@ -1217,6 +1251,23 @@ This gives Wrela three levels of error handling:
 - `try expr` for same-error propagation.
 - `try expr else return Constructor` or `try expr else err { ... }` for explicit
   mapping.
+
+## Never
+
+`Never` is the bottom type. It represents control flow that does not return to
+the current continuation.
+
+Expressions with type `Never` include:
+
+- `trap(...)`
+- `return ...`
+- an intentional `loop` body that cannot break
+- calls to methods declared `-> Never`
+- fault-policy methods that halt, reboot, or otherwise leave normal execution
+
+`Never` can satisfy any expected expression type because it never produces a
+value. This lets exhaustive matches and `try else err { ... }` blocks typecheck
+when every error arm returns, traps, or calls another non-returning method.
 
 ## Trap And Fault Policy
 
@@ -1377,6 +1428,41 @@ only inside `unique class` capabilities that own the relevant machine
 authority. This keeps low-level drivers possible without creating ambient
 machine access.
 
+## Synchronization And Memory Ordering
+
+Parallel executors, interrupt paths, DMA, and device queues require explicit
+synchronization. Wrela should not provide ambient shared mutable state or
+ambient atomics. Synchronization is a capability, minted by a unique authority
+or constructed from an owned queue, ring, lock, or atomic cell.
+
+Initial synchronization shapes:
+
+- `Atomic[T]` for scalar atomic cells with an explicit memory order.
+- queue and ring types that encode producer/consumer ownership.
+- interrupt queues minted from interrupt-controller authority.
+- lock or gate capabilities only where a platform or root explicitly installs
+  them.
+
+Initial memory-order names should map cleanly to AArch64:
+
+- `Relaxed`
+- `Acquire`
+- `Release`
+- `AcquireRelease`
+- `Sequential`
+
+MMIO and DMA-facing operations must require explicit ordering at the operation
+or capability-policy level. A volatile load is not automatically an acquire
+operation, and a volatile store is not automatically a release operation.
+Drivers should make ordering visible through methods such as
+`load(order = Acquire)`, `store(value, order = Release)`, or a higher-level
+queue operation whose type documents the ordering it performs.
+
+Executor lanes do not grant shared mutable access by themselves. Work crossing
+lanes must move owned messages, use `read` shared dependencies, or pass through
+an explicit synchronization capability. This keeps hosted lanes, QEMU core
+paths, interrupts, and driver queues under the same authority model.
+
 ## Durable Arenas And Frames
 
 Wrela separates durable memory from temporary frame memory.
@@ -1423,30 +1509,54 @@ Parent-lifetime values can be read inside child frames. Child-lifetime values
 cannot be stored into parent-lifetime values. The rule is lifetime-based, not
 name-based; aliases carry the same hidden lifetime.
 
-## Infallible Bounded Memory
+## Bounded Memory And Admission
 
-Default memory operations are infallible in source and trap on capacity
-violation.
+Default arena, frame, and raw memory operations are infallible in source and
+trap on capacity violation. These operations represent the image memory plan. If
+they run out, the image was composed incorrectly or a trusted invariant was
+violated.
+
+Table and index insertion sit closer to application admission policy. They
+should expose recoverable insertion by default:
 
 Examples:
 
 ```wrela
-class SessionStore {
+class SessionLog {
+    sessions: Table[Session, 4096]
+
+    fn admit(mut self, session: Session) -> Result[None, SessionError] {
+        try sessions.insert(session) else return SessionError.Full
+
+        return Ok(None)
+    }
+}
+```
+
+If full-table admission is an invariant violation rather than an expected input
+condition, the operation should say so:
+
+```wrela
+class TrustedSessionStore {
     sessions: Table[Session, 4096]
     by_id: Index[SessionId, 8192]
 
-    fn insert(mut self, session: Session) -> None {
-        let row = sessions.insert(session)
-        by_id.insert(key = session.id, row = row)
+    fn insert_or_trap(mut self, session: Session) -> None {
+        let row = sessions.insert_or_trap(session)
+        by_id.insert_or_trap(key = session.id, row = row)
 
         return None
     }
 }
 ```
 
-If `sessions` is full, or `by_id` cannot insert within its bounded policy, the
-operation traps. This is intentional: for ordinary durable memory, OOM means the
-image memory plan or input contract is wrong.
+The split is intentional:
+
+- Arena, frame, DMA buffer, and raw region capacity violations trap by default.
+- `Table.insert` and `Index.insert` return `Result` because admission failure
+  is often normal for externally driven systems.
+- `insert_or_trap`, `require`, and similarly named operations trap when the
+  caller is asserting an invariant.
 
 Non-trapping capacity behavior must be explicit in the type or policy name:
 
@@ -1457,8 +1567,9 @@ Non-trapping capacity behavior must be explicit in the type or policy name:
 
 Cache-full is not ordinary OOM when the cache is declared as evicting. Queue
 overflow is not ordinary OOM when the queue is declared lossy or dropping.
-Those are domain policies, not hidden allocation failures. Ordinary table,
-index, arena, frame, and ring capacity violations trap by default.
+Those are domain policies, not hidden allocation failures. This keeps OOM
+trapping as the memory-authority default while preventing normal external input
+pressure from becoming an accidental image-level fault.
 
 ## Tables And Indexes
 
@@ -1574,9 +1685,9 @@ let sources = packets.src
 
 Tables are a logical data model, not a stable object-address model. Taking the
 address of a row should be restricted because there may not be an addressable
-array-of-structs row in memory. Tables are also bounded storage: inserting past
-declared capacity traps unless the table type explicitly advertises a
-non-trapping policy.
+array-of-structs row in memory. Tables are also bounded storage:
+`Table.insert` returns `Result[RowToken, CapacityError]` when declared capacity
+is full, while `insert_or_trap` is available for invariant-checked insertion.
 
 Row tokens are scoped compiler capabilities. They cannot be stored, returned,
 published, hidden inside data, or converted to pointers. Structural table
@@ -1989,13 +2100,13 @@ class InMemoryBlockDevice<M: Memory> implements BlockDevice {
 class FaultInjectingBlockDevice<D: BlockDevice> implements BlockDevice {
     inner: D
     fail_after_writes: U32
-    writes: U32
+    writes: Counter
 
     constructor(inner: D, fail_after_writes: U32) {
         return Self(
             inner = inner,
             fail_after_writes = fail_after_writes,
-            writes = 0,
+            writes = Counter(initial = 0),
         )
     }
 
@@ -2004,10 +2115,10 @@ class FaultInjectingBlockDevice<D: BlockDevice> implements BlockDevice {
     }
 
     fn write(mut self, index: U32, block: Block) -> Result[None, DiskError] {
-        match writes >= fail_after_writes {
+        match writes.value() >= fail_after_writes {
             true => return Err(DiskError.InjectedFailure)
             false => {
-                writes += 1
+                writes.increment()
                 return inner.write(index, block)
             }
         }
@@ -2087,6 +2198,8 @@ The assertion mode is part of typechecking:
 - `assert value` is valid for scalar, enum, error, and `data` value claims.
 - `assert same` is valid for classes, unique authorities, borrowed class
   references, and other identity-bearing capabilities.
+- For borrowed class references, `assert same` compares the identity of the
+  borrow target, not the temporary reference slot.
 - `assert same` is invalid for pure `data` values unless a future explicit
   handle type gives them identity.
 
@@ -2099,11 +2212,22 @@ The runner receives:
 
 - Its own concrete reporting capabilities constrained by interfaces such as
   `Console` and `Clock`.
-- A list of already-constructed suite values.
+- A compiler-known suite tuple of already-constructed suite values.
 
 `TestRunner` should follow the same static-interface rule as suites. A runner
 with reporting dependencies is generic over concrete capability types rather
 than storing interface-typed fields.
+
+Suite lists are not runtime interface arrays. The literal passed to
+`runner.run([...])` is a compiler-known heterogeneous tuple. The runner call is
+typechecked as a generic compile-time fold over that tuple: each element must be
+a suite class, and the compiler expands iteration over each suite's known test
+metadata. This keeps root syntax ergonomic without adding runtime vtables,
+interface-typed suite fields, or hidden test discovery.
+
+An empty suite list has the unit tuple type. A single suite list has a
+one-element tuple type. Long-term, the compiler may display a friendly
+`SuiteList[...]` diagnostic name, but source semantics are tuple-shaped.
 
 The runner performs:
 
@@ -2206,6 +2330,8 @@ The compiler enforces the test model with these rules:
 - A class with at least one `test` declaration is a test suite.
 - `TestRunner.run(suites)` accepts only values whose classes contain test
   metadata.
+- The `suites` argument is a heterogeneous compiler-known tuple, not a runtime
+  list of interface objects.
 - `TestRunner.run_parallel(suites, lanes)` also requires explicitly supplied
   executor lanes and rejects hidden hosted worker construction.
 - A test body can access suite fields and its own `with` fixtures.
@@ -2330,12 +2456,17 @@ This design does not require:
 - Runtime generic dictionaries or hidden type metadata for generics.
 - Interface-typed fields as implicit existential objects.
 - Interface-typed suite fields or hidden runtime capability objects.
+- Implicit dynamic dispatch as a workaround for generic verbosity.
 - Using `unique class` as the general marker for move-only state.
 - Multiple instances of the same concrete `unique class` specialization in one
   image call graph.
+- Direct construction of const-generic unique authorities to bypass a parent
+  authority.
 - Developer-authored effect or permission clauses for privileged operations.
+- Developer-authored `requires` clauses for privileged operations.
 - Pointer arithmetic or raw memory dereference outside unique authority.
 - Assembly functions outside unique authority.
+- Returning borrowed views from methods in v1.
 - Implicit copying of class values.
 - Mutable class-field rebinding after construction.
 - Long-lived `mut` dependency fields in the initial language.
@@ -2351,6 +2482,8 @@ This design does not require:
 - Ambient filesystem, stdout, clock, allocator, or process access.
 - A requirement that all tests be runnable under every profile.
 - A generic `assert expr` form.
+- `if` as initial syntax sugar for `match Bool`.
+- Associated/static class methods without `self` in v1.
 
 ## Initial Language Shape
 
@@ -2372,24 +2505,30 @@ The first language nucleus should include:
   `read`.
 - `unique class` for graph-root authorities with one instantiation per concrete
   specialization in the image call graph.
+- parent-minted identities for const-generic unique authorities.
 - ordinary owned classes for executor instances, driver paths, queues, caches,
   indexes, and other move-only state that may have many explicit instances.
-- authority-gated machine effects through unique capabilities.
+- authority-gated inferred effects through unique capabilities.
 - fixed-size primitive scalar types with explicit wrapping, saturating, and
   checked arithmetic.
+- no returning borrowed views from methods in v1.
 - `match` as the core exhaustive scalar branching form.
 - work-shaped loops: `repeat`, table-row `for`, `drain`, `reduce`, `scan`, and
   intentional `loop`.
 - `return` as an explicit keyword in normal control flow.
 - `Option[T]`, `Result[T, E]`, and closed `error` sums.
+- `Never` as the bottom type for control flow that does not return.
 - `try`, `try else return`, and expanded `try else err { ... }`.
 - `trap` as a `Never`-typed abnormal control-flow boundary.
 - memory authority roots and bounded arenas.
 - bounded memory views such as `Buffer[T]`, `ReadBuffer[T]`, `Bytes`, `Mmio[T]`,
   and `DmaBuffer[T]`.
+- synchronization capabilities and explicit AArch64-shaped memory ordering.
 - `with` frames for scoped scratch memory.
 - `data` for logical records.
 - `Table[T, N]` for static-capacity columnar bulk logical data.
+- `Table.insert` and `Index.insert` as recoverable admission, with
+  `insert_or_trap` for invariants.
 - concrete index types for bounded lookup metadata over tables.
 - table-provenance-aware `Mask` values for row selection and predication.
 - `layout` for physical memory representation.
@@ -2397,6 +2536,8 @@ The first language nucleus should include:
 - `image` and `host image` roots, starting with QEMU `virt`, then Raspberry Pi
   5, then GCP cloud ARM VM.
 - `test` declarations inside suite classes.
+- heterogeneous test suite literals as compiler-known tuples folded by the
+  runner.
 - `assert value` and `assert same` inside test blocks.
 
 This gives Wrela a scalar authority model and a vector-friendly data model
@@ -2413,21 +2554,24 @@ The next design pass should still settle:
 - Exact syntax for custom reduction operators.
 - Exact result type names for `scan` and whether scans can omit an empty body.
 - Whether retry/poll loops need additional diagnostics beyond bounded `repeat`.
-- Exact lifetime notation and diagnostics for `read` fields and borrowed class
-  dependencies.
+- Exact lifetime diagnostics for `read` fields and borrowed class dependencies,
+  plus future notation for returning borrowed views after v1.
 - Exact diagnostic shape for inferred effects and authority sources.
 - Exact built-in generic constraint names beyond the initial capitalized set.
 - Whether later backends share code between compatible generic instantiations.
+- Whether explicit dispatch capabilities are needed after static generic
+  specialization has been exercised in real services.
 - Whether `test` declarations are allowed only in classes or also modules.
 - Exact diagnostic payloads for `assert value` and `assert same` failures.
 - Exact hosted process exit mapping for `TestSummary`.
 - Exact parallel test lane API and deterministic timeout/reporting behavior.
 - Exact hosted executor-lane implementation and isolation policy: host threads,
   worker processes, or another explicit hosted mechanism.
-- How heterogeneous lists of generic test suite instances are represented
-  without runtime interface objects.
+- Exact tuple diagnostic names and size limits for heterogeneous test suite
+  literals.
 - Exact arena type names for root, executor, driver, DMA, table, cache, and
   scratch memory.
+- Exact synchronization capability APIs and memory-order syntax.
 - Exact platform library shapes for core paths, interrupt bindings, executor
   lane sets, and driver path minting.
 - Exact `TrapCode` cases for OOM, capacity violations, bounds failures, and
