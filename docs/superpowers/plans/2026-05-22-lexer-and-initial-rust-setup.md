@@ -18,14 +18,17 @@
 - No manifests exist. The command receives a root image file path.
 - Source reachability expands only through explicit `use ... from ...` imports in reachable source files.
 - Import paths use dotted module syntax: `tests.ring_buffer` resolves to `<root-dir>/tests/ring_buffer.wrela`.
-- The source root is the parent directory of the root image file.
+- The source root is the parent directory of the canonical root image file.
 - Import module segments must be identifiers. Absolute paths, `..`, path separators, and file extensions inside imports are invalid.
 - The lexer has no dev/release mode.
 - Lexing is parallelized across files, not within a file.
 - Lexing stores byte spans into the original source and does not copy token or trivia text.
+- Every token and trivia span must start and end on UTF-8 character boundaries.
 - Source text is UTF-8. Non-UTF-8 input is a source loading diagnostic.
+- Diagnostics may be spanned or unspanned. Source-free failures must not invent a `FileId`.
 - Comments and doc comments are trivia. Doc-comment attachment is not performed by the lexer.
 - Block comments are nestable.
+- Root-driven discovery canonicalizes loadable file paths before de-duplicating them.
 - Production code must not use `unsafe`.
 - Production code must not use `todo!()` or `unimplemented!()`.
 
@@ -84,17 +87,21 @@ pub fn discover::discover_from_root(root: impl AsRef<Path>) -> DiscoverResult;
 ## Parallel Work Map
 
 - Task 1 must run first.
-- Tasks 2 and 3 can run in parallel after Task 1.
-- Task 4 depends on Tasks 2 and 3.
+- Task 2 depends on Task 1.
+- Task 3 depends on Task 2 because diagnostics use `Span` and `FileId`.
+- Task 4 depends on Task 3.
 - Tasks 5, 6, and 7 are sequential because they build the same lexer behavior.
-- Task 8 depends on Task 7.
-- Task 9 depends on Task 7.
+- Tasks 8 and 9 can run in parallel after Task 7.
 - Task 10 depends on Tasks 8 and 9.
 - Task 11 depends on Task 10.
 - Task 12 depends on Task 11.
 - Task 13 is the final quality gate.
 
 Each task has a narrow ownership boundary. If two subagents touch the same file, the later task must re-read the current file before editing.
+
+## Subagent Git Discipline
+
+Parallel subagents must not commit directly to the same branch. Each subagent works in its own branch or worktree named for the task, such as `codex/task-08-parallel-lexing`, and task commit steps apply to that isolated branch. The integration owner merges completed task branches back in dependency order from the Parallel Work Map. If two completed branches touch the same file, the later merge owner re-runs that task's verification commands after resolving conflicts.
 
 ---
 
@@ -231,7 +238,7 @@ git commit -m "feat: create rust command center skeleton -Codex Automated"
 
 - `cargo check` succeeds.
 - `cargo metadata --no-deps --format-version 1` lists no third-party dependencies.
-- `cargo run -- help` prints `wrela commands: help, version`.
+- `cargo run -- help` exits 0 and mentions `help` and `version`; later tasks may expand the help text.
 - `cargo run -- version` prints `wrela 0.1.0`.
 
 ---
@@ -255,9 +262,9 @@ mod tests {
 
     #[test]
     fn source_file_computes_line_starts() {
-        let file = SourceFile::new(FileId::new(7), PathBuf::from("sample.wrela"), "one\ntwo\r\nthree".to_string());
+        let file = SourceFile::new(FileId::new(7), PathBuf::from("sample.wrela"), "one\rtwo\nthree\r\nfour".to_string());
 
-        assert_eq!(file.line_starts(), &[0, 4, 9]);
+        assert_eq!(file.line_starts(), &[0, 4, 8, 15]);
     }
 
     #[test]
@@ -428,6 +435,10 @@ fn compute_line_starts(text: &str) -> Vec<u32> {
                 starts.push((index + 2) as u32);
                 index += 2;
             }
+            b'\r' => {
+                starts.push((index + 1) as u32);
+                index += 1;
+            }
             _ => index += 1,
         }
     }
@@ -480,8 +491,8 @@ mod tests {
     #[test]
     fn detects_errors() {
         let diagnostics = vec![
-            Diagnostic::new(Severity::Warning, Span::new(FileId::new(0), 1, 2), "warning"),
-            Diagnostic::new(Severity::Error, Span::new(FileId::new(0), 2, 3), "error"),
+            Diagnostic::new(Severity::Warning, Some(Span::new(FileId::new(0), 1, 2)), "warning"),
+            Diagnostic::new(Severity::Error, Some(Span::new(FileId::new(0), 2, 3)), "error"),
         ];
 
         assert!(has_errors(&diagnostics));
@@ -489,9 +500,16 @@ mod tests {
 
     #[test]
     fn renders_single_line() {
-        let diagnostic = Diagnostic::new(Severity::Error, Span::new(FileId::new(3), 4, 9), "bad token");
+        let diagnostic = Diagnostic::new(Severity::Error, Some(Span::new(FileId::new(3), 4, 9)), "bad token");
 
         assert_eq!(diagnostic.render_compact(), "error[file=3 4..9]: bad token");
+    }
+
+    #[test]
+    fn renders_unspanned_diagnostics() {
+        let diagnostic = Diagnostic::new(Severity::Error, None, "could not load root file");
+
+        assert_eq!(diagnostic.render_compact(), "error: could not load root file");
     }
 }
 ```
@@ -529,28 +547,32 @@ impl Severity {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Diagnostic {
     severity: Severity,
-    span: Span,
+    span: Option<Span>,
     message: String,
 }
 
 impl Diagnostic {
-    pub fn new(severity: Severity, span: Span, message: impl Into<String>) -> Self {
+    pub fn new(severity: Severity, span: Option<Span>, message: impl Into<String>) -> Self {
         Self { severity, span, message: message.into() }
     }
 
     pub fn error(span: Span, message: impl Into<String>) -> Self {
-        Self::new(Severity::Error, span, message)
+        Self::new(Severity::Error, Some(span), message)
+    }
+
+    pub fn unspanned_error(message: impl Into<String>) -> Self {
+        Self::new(Severity::Error, None, message)
     }
 
     pub fn warning(span: Span, message: impl Into<String>) -> Self {
-        Self::new(Severity::Warning, span, message)
+        Self::new(Severity::Warning, Some(span), message)
     }
 
     pub fn severity(&self) -> Severity {
         self.severity
     }
 
-    pub fn span(&self) -> Span {
+    pub fn span(&self) -> Option<Span> {
         self.span
     }
 
@@ -559,14 +581,17 @@ impl Diagnostic {
     }
 
     pub fn render_compact(&self) -> String {
-        format!(
-            "{}[file={} {}..{}]: {}",
-            self.severity.label(),
-            self.span.file_id().raw(),
-            self.span.start(),
-            self.span.end(),
-            self.message
-        )
+        match self.span {
+            Some(span) => format!(
+                "{}[file={} {}..{}]: {}",
+                self.severity.label(),
+                span.file_id().raw(),
+                span.start(),
+                span.end(),
+                self.message
+            ),
+            None => format!("{}: {}", self.severity.label(), self.message),
+        }
     }
 }
 
@@ -594,7 +619,8 @@ git commit -m "feat: add diagnostic data model -Codex Automated"
 
 **Acceptance Criteria:**
 
-- Diagnostics carry severity, span, and message.
+- Diagnostics carry severity, optional span, and message.
+- Diagnostics omit a span for source-free failures.
 - `has_errors` reports whether any diagnostic is an error.
 - Rendering is deterministic and does not need source text.
 - No compiler phase prints diagnostics directly in this task.
@@ -935,7 +961,7 @@ git commit -m "feat: define lexer artifact types -Codex Automated"
 **Files:**
 - Modify: `src/lexer/lex.rs`
 
-**Description:** Implement the first working `lex_file` pass with identifiers, keywords, punctuation, whitespace/newline trivia, unknown bytes, EOF, and diagnostics. Comment trivia is handled in Task 6.
+**Description:** Implement the first working `lex_file` pass with identifiers, keywords, punctuation, whitespace/newline trivia, unknown characters, EOF, and diagnostics. Comment trivia is handled in Task 6.
 
 - [ ] **Step 1: Write tests in `src/lexer/lex.rs`**
 
@@ -983,6 +1009,21 @@ mod tests {
         assert!(kinds.contains(&TokenKind::Unknown));
         assert_eq!(lexed.diagnostics().len(), 1);
         assert_eq!(lexed.diagnostics()[0].message(), "unknown character");
+    }
+
+    #[test]
+    fn non_ascii_unknown_spans_cover_the_full_codepoint() {
+        let source = file("let café");
+        let lexed = lex_file(&source);
+        let unknown = lexed
+            .tokens()
+            .iter()
+            .find(|token| token.kind() == TokenKind::Unknown)
+            .unwrap();
+        let span = unknown.span();
+
+        assert_eq!(&source.text()[span.start() as usize..span.end() as usize], "é");
+        assert_eq!(lexed.diagnostics().len(), 1);
     }
 }
 ```
@@ -1110,13 +1151,26 @@ Punctuation rules:
 "~" => Punct::Tilde
 ```
 
-Unknown bytes emit `TokenKind::Unknown` and `Diagnostic::error(span, "unknown character")`.
+Unknown-character rules:
+
+- ASCII characters that are not identifiers, punctuation, literal starts, or trivia starts emit one `TokenKind::Unknown` with a one-byte span and `Diagnostic::error(span, "unknown character")`.
+- Non-ASCII UTF-8 characters that are otherwise unsupported emit one `TokenKind::Unknown` spanning the full UTF-8 codepoint and one `unknown character` diagnostic.
+- Do not create spans that start or end in the middle of a UTF-8 codepoint.
+
+Use this helper whenever advancing an unsupported non-ASCII character:
+
+```rust
+fn next_char_len(text: &str, cursor: usize) -> usize {
+    text[cursor..].chars().next().unwrap().len_utf8()
+}
+```
 
 Whitespace rules:
 
-- `b' ' | b'\t'` and other non-newline ASCII whitespace become `TriviaKind::Whitespace`.
-- `b'\n'` becomes `TriviaKind::Newline`.
+- Contiguous `b' ' | b'\t'` and other non-newline ASCII whitespace bytes become one `TriviaKind::Whitespace`.
+- `b'\n'` becomes one `TriviaKind::Newline`.
 - `b'\r\n'` becomes one `TriviaKind::Newline`.
+- Bare `b'\r'` becomes one `TriviaKind::Newline`.
 - Whitespace and newline trivia are not semantic tokens.
 
 Always append `TokenKind::Eof` at an empty span at the end of the file.
@@ -1143,6 +1197,8 @@ git commit -m "feat: lex identifiers keywords and punctuation -Codex Automated"
 - `lex_file` requires only `&SourceFile`.
 - Identifiers and keywords are distinguished.
 - Unknown characters are diagnostics, not panics.
+- Unknown non-ASCII characters produce one token per UTF-8 codepoint.
+- Token and trivia spans are valid UTF-8 character boundaries.
 - EOF token is always emitted.
 - Whitespace and newlines are preserved as trivia.
 
@@ -1156,6 +1212,8 @@ git commit -m "feat: lex identifiers keywords and punctuation -Codex Automated"
 **Description:** Extend the lexer from whitespace/newline trivia to comment and doc-comment trivia while keeping semantic tokens clean.
 
 - [ ] **Step 1: Add trivia tests in `src/lexer/lex.rs`**
+
+Add these tests to the existing `#[cfg(test)] mod tests` in `src/lexer/lex.rs`, next to the tests from Task 5.
 
 ```rust
 #[test]
@@ -1200,6 +1258,24 @@ fn nested_block_comments_are_one_trivia_item() {
     assert_eq!(lexed.trivia()[0].kind(), TriviaKind::BlockComment);
     assert!(lexed.diagnostics().is_empty());
 }
+
+#[test]
+fn comment_edge_cases_have_stable_kinds() {
+    let source = file("//// not docs\n/**** also not docs */\n//! docs");
+    let lexed = lex_file(&source);
+    let trivia_kinds: Vec<TriviaKind> = lexed.trivia().iter().map(|trivia| trivia.kind()).collect();
+
+    assert_eq!(
+        trivia_kinds,
+        vec![
+            TriviaKind::LineComment,
+            TriviaKind::Newline,
+            TriviaKind::BlockComment,
+            TriviaKind::Newline,
+            TriviaKind::DocComment,
+        ]
+    );
+}
 ```
 
 - [ ] **Step 2: Run tests to verify they fail**
@@ -1217,9 +1293,13 @@ Expected: comment trivia tests fail because comment trivia is not emitted yet.
 Keep the whitespace and newline branches from Task 5. Add comment branches before slash punctuation:
 
 - `//` becomes `TriviaKind::LineComment`.
-- `///` and `//!` become `TriviaKind::DocComment`.
+- `///` becomes `TriviaKind::DocComment` unless the byte after the `///` prefix is `/`.
+- `//!` becomes `TriviaKind::DocComment`.
+- `////` and longer slash runs become `TriviaKind::LineComment`.
 - `/* ... */` becomes `TriviaKind::BlockComment`.
-- `/** ... */` and `/*! ... */` become `TriviaKind::DocComment`.
+- `/** ... */` becomes `TriviaKind::DocComment` unless the byte after the `/**` prefix is `*`.
+- `/*! ... */` becomes `TriviaKind::DocComment`.
+- `/****/` and longer star-leading block comments become `TriviaKind::BlockComment`.
 - block comments are nestable.
 
 For unterminated block comments, emit the trivia item to EOF and add:
@@ -1525,6 +1605,29 @@ mod tests {
 
         assert_eq!(summary.diagnostics()[0].message(), "expected module path after from");
     }
+
+    #[test]
+    fn rejects_use_without_from() {
+        let summary = summary("use { Console }");
+
+        assert_eq!(summary.diagnostics()[0].message(), "expected from in use import");
+    }
+
+    #[test]
+    fn recovers_when_second_use_appears_before_from() {
+        let summary = summary("use { Broken } use { Console } from app.console");
+        let modules: Vec<String> = summary.imports().iter().map(|import| import.module().as_dotted()).collect();
+
+        assert_eq!(summary.diagnostics()[0].message(), "expected from in use import");
+        assert_eq!(modules, vec!["app.console"]);
+    }
+
+    #[test]
+    fn rejects_invalid_module_start_after_from() {
+        let summary = summary("use { Console } from 123");
+
+        assert_eq!(summary.diagnostics()[0].message(), "expected module path after from");
+    }
 }
 ```
 
@@ -1610,18 +1713,25 @@ impl ImportSummary {
 Parsing rules:
 
 - Scan semantic tokens only.
-- When `Keyword::Use` is found, advance until `Keyword::From`.
+- When `Keyword::Use` is found, scan forward looking for `Keyword::From`.
+- If EOF appears before `from`, emit `expected from in use import` on the `use` token span.
+- If another `Keyword::Use` appears before `from`, emit `expected from in use import` on the first `use` token span and continue scanning from the second `use`.
 - After `from`, require `Identifier (Dot Identifier)*`.
 - Record the module path span from the first identifier through the last identifier.
-- If `from` is present without a module path, emit `expected module path after from`.
+- If `from` is present and the next semantic token is EOF or anything other than an identifier, emit `expected module path after from` on the `from` token span.
 - If a dotted path has `.` not followed by an identifier, emit `expected identifier after dot in module path`.
+- After a malformed module path, skip to the next `Keyword::Use` or EOF.
 - Continue scanning after recoverable import errors.
 
 Use source text slicing for identifier segment text:
 
 ```rust
 fn token_text<'a>(source: &'a SourceFile, token: Token) -> &'a str {
-    &source.text()[token.span().start() as usize..token.span().end() as usize]
+    let start = token.span().start() as usize;
+    let end = token.span().end() as usize;
+    debug_assert!(source.text().is_char_boundary(start));
+    debug_assert!(source.text().is_char_boundary(end));
+    &source.text()[start..end]
 }
 ```
 
@@ -1667,11 +1777,27 @@ mod tests {
     use std::fs;
     use std::path::{Path, PathBuf};
 
-    fn unique_temp_dir(name: &str) -> PathBuf {
+    struct TestDir {
+        path: PathBuf,
+    }
+
+    impl TestDir {
+        fn path(&self) -> &Path {
+            &self.path
+        }
+    }
+
+    impl Drop for TestDir {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.path);
+        }
+    }
+
+    fn unique_temp_dir(name: &str) -> TestDir {
         let mut dir = std::env::temp_dir();
         dir.push(format!("wrela-{name}-{}-{}", std::process::id(), unique_suffix()));
         fs::create_dir_all(&dir).unwrap();
-        dir
+        TestDir { path: fs::canonicalize(dir).unwrap() }
     }
 
     fn unique_suffix() -> u128 {
@@ -1691,16 +1817,16 @@ mod tests {
     #[test]
     fn discovers_imported_files_from_root() {
         let dir = unique_temp_dir("discover");
-        let root = dir.join("root.wrela");
+        let root = dir.path().join("root.wrela");
         write(&root, "use { Console } from app.console\nimage Root {}");
-        write(&dir.join("app/console.wrela"), "class Console {}");
+        write(&dir.path().join("app/console.wrela"), "class Console {}");
 
         let result = discover_from_root(&root);
         let paths: Vec<String> = result
             .source_map()
             .files()
             .iter()
-            .map(|file| file.path().strip_prefix(&dir).unwrap().to_string_lossy().replace('\\', "/"))
+            .map(|file| file.path().strip_prefix(dir.path()).unwrap().to_string_lossy().replace('\\', "/"))
             .collect();
 
         assert_eq!(paths, vec!["root.wrela", "app/console.wrela"]);
@@ -1710,12 +1836,22 @@ mod tests {
     #[test]
     fn reports_missing_imported_file() {
         let dir = unique_temp_dir("missing");
-        let root = dir.join("root.wrela");
+        let root = dir.path().join("root.wrela");
         write(&root, "use { Missing } from app.missing\nimage Root {}");
 
         let result = discover_from_root(&root);
 
-        assert!(result.diagnostics().iter().any(|diagnostic| diagnostic.message().contains("could not load imported file")));
+        assert!(result.diagnostics().iter().any(|diagnostic| diagnostic.message() == "could not load imported file"));
+    }
+
+    #[test]
+    fn reports_missing_root_without_invented_file_id() {
+        let dir = unique_temp_dir("missing-root");
+        let result = discover_from_root(dir.path().join("missing.wrela"));
+
+        assert_eq!(result.source_map().files().len(), 0);
+        assert_eq!(result.diagnostics()[0].message(), "could not load root file");
+        assert!(result.diagnostics()[0].span().is_none());
     }
 }
 ```
@@ -1773,14 +1909,20 @@ impl DiscoverResult {
 Rules:
 
 - Root file gets `FileId::new(0)`.
-- Source root is `root.parent().unwrap_or(Path::new("."))`.
+- Canonicalize the root path before loading it. If canonicalization or loading fails, return an empty `SourceMap`, no lexed files, no import summaries, and one unspanned diagnostic with message `could not load root file`.
+- Source root is the canonical root file's `parent().unwrap_or(Path::new("."))`.
 - `ModulePath { segments: ["app", "console"] }` resolves to `<source-root>/app/console.wrela`.
-- Use a `BTreeMap<PathBuf, FileId>` to de-duplicate paths.
+- Canonicalize each resolved import path before loading it. If canonicalization or loading fails, emit `Diagnostic::error(import_span, "could not load imported file")`.
+- Use a `BTreeMap<PathBuf, FileId>` keyed by canonical path to de-duplicate paths.
 - Use `VecDeque<PathBuf>` as the frontier.
+- Within each frontier batch, load candidate paths in ascending canonical `PathBuf` order so `FileId` assignment is stable.
 - Load all files in a frontier batch, then call `lex_files_parallel` on that batch.
 - Parse import summaries after lexing the batch.
-- Push unseen imports into the next frontier in deterministic order.
-- If a file cannot be loaded, emit a diagnostic on the importing span when available.
+- Resolve and canonicalize unseen imports into sorted candidate records keyed by canonical or resolved path before extending the next frontier.
+- `DiscoverResult::diagnostics()` contains a merged view of root-load, file-load, lexer, and import-summary diagnostics. `LexedFile` and `ImportSummary` still retain their own diagnostics.
+- Diagnostic order is deterministic:
+  - root-load diagnostic first, when present;
+  - otherwise, for each `FileId` in ascending order, append that file's lexer diagnostics in source order, then import-summary diagnostics in source order, then import-load diagnostics from that file sorted by importing span and resolved target path.
 
 Path resolution helper:
 
@@ -1795,7 +1937,11 @@ fn resolve_module(source_root: &Path, module: &ModulePath) -> PathBuf {
 }
 ```
 
-For root load failure, create an empty `SourceMap`, no lexed files, and one diagnostic using `Span::new(FileId::new(0), 0, 0)` with message `could not load root file`.
+For root load failure, create an empty `SourceMap`, no lexed files, no import summaries, and one diagnostic:
+
+```rust
+Diagnostic::unspanned_error("could not load root file")
+```
 
 - [ ] **Step 5: Run tests**
 
@@ -1820,8 +1966,9 @@ git commit -m "feat: discover sources from root imports -Codex Automated"
 - Reachability starts from a root image path.
 - Imports fan out through frontier batches.
 - Newly discovered batches are lexed with `lex_files_parallel`.
-- Duplicate imports load once.
-- Discovery diagnostics are deterministic.
+- Duplicate imports load once after canonical-path de-duplication.
+- Root-load failure diagnostics are unspanned.
+- `DiscoverResult::diagnostics()` merges discovery, lexer, and import-summary diagnostics in the specified deterministic order.
 
 ---
 
@@ -2116,7 +2263,27 @@ cargo fmt --check
 
 Expected: pass. If it fails, run `cargo fmt`, inspect the diff, and include formatting changes in the final commit.
 
-- [ ] **Step 2: Run all tests**
+- [ ] **Step 2: Treat compiler warnings as errors**
+
+Run:
+
+```bash
+RUSTFLAGS="-D warnings" cargo check --all-targets
+```
+
+Expected: all targets compile with zero warnings.
+
+- [ ] **Step 3: Run Clippy with warnings denied**
+
+Run:
+
+```bash
+cargo clippy --all-targets -- -D warnings
+```
+
+Expected: Clippy reports no warnings.
+
+- [ ] **Step 4: Run all tests**
 
 Run:
 
@@ -2126,17 +2293,17 @@ cargo test -- --nocapture
 
 Expected: all unit and integration tests pass.
 
-- [ ] **Step 3: Check production source for unfinished markers**
+- [ ] **Step 5: Check production source for unfinished markers**
 
 Run:
 
 ```bash
-rg -n 'todo!|unimplemented!|unsafe' src
+rg -n '\b(todo!|unimplemented!)\s*\(|\bunsafe\b' src --glob '*.rs'
 ```
 
-Expected: no matches.
+Expected: no matches. Treat any match in production source as a failure, including comments and string literals, because the initial compiler code should not need these markers or terms.
 
-- [ ] **Step 4: Confirm zero external dependencies**
+- [ ] **Step 6: Confirm zero external dependencies**
 
 Run:
 
@@ -2146,7 +2313,7 @@ cargo metadata --no-deps --format-version 1
 
 Expected: output includes package `wrela` and does not download or list third-party dependency packages.
 
-- [ ] **Step 5: Run CLI smoke tests**
+- [ ] **Step 7: Run CLI smoke tests**
 
 Run:
 
@@ -2164,7 +2331,7 @@ Expected:
 - `dump tokens` prints token and trivia lines.
 - `lex` prints three reachable files with token/trivia/diagnostic counts.
 
-- [ ] **Step 6: Commit final fixes**
+- [ ] **Step 8: Commit final fixes**
 
 If this task changed files:
 
@@ -2178,8 +2345,10 @@ If this task changed no files, do not create an empty commit.
 **Acceptance Criteria:**
 
 - `cargo fmt --check` passes.
+- `RUSTFLAGS="-D warnings" cargo check --all-targets` passes.
+- `cargo clippy --all-targets -- -D warnings` passes.
 - `cargo test -- --nocapture` passes.
-- `rg -n 'todo!|unimplemented!|unsafe' src` has no matches.
+- `rg -n '\b(todo!|unimplemented!)\s*\(|\bunsafe\b' src --glob '*.rs'` has no matches.
 - CLI smoke tests behave exactly as specified.
 - `git status --short` is clean after any final commit.
 
@@ -2194,6 +2363,9 @@ If this task changed no files, do not create an empty commit.
 - Lexing one file needs only `&SourceFile`.
 - Batch lexing sorts results by `FileId`.
 - Tokens and trivia store spans into source text.
+- Token and trivia spans never split UTF-8 codepoints.
 - Diagnostics are returned as data until the CLI prints them.
+- Source-free failures use unspanned diagnostics instead of invented file IDs.
+- `DiscoverResult::diagnostics()` is the deterministic merged diagnostic view.
 - Tests cover trivia preservation and error recovery.
 - The project has no external dependencies.
