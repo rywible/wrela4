@@ -55,6 +55,8 @@ sets the project philosophy:
   passes.
 - The lexer is lossless and preserves trivia for formatting, diagnostics, and
   later tooling.
+- Source reachability starts from an explicit root image file and expands
+  through source imports. There are no manifests.
 
 This includes popular and high-quality crates. `clap`, `serde`, `anyhow`,
 `thiserror`, `miette`, parser generators, snapshot testing crates, async
@@ -157,6 +159,77 @@ Merges must be deterministic. Diagnostics, symbol tables, object fragments, and
 image sections should be ordered by stable source or graph IDs, not by thread
 completion order.
 
+## Root-Driven Source Discovery
+
+Wrela source reachability starts from an explicit root image file. There are no
+manifests. No separate file should exist to list source files, inject dependency
+edges, or smuggle build behavior into the compiler.
+
+The first source discovery loop should be:
+
+1. Load the root image file.
+2. Lex the root file.
+3. Parse only the import/root summary needed for discovery.
+4. Resolve directly imported source files.
+5. Load newly discovered files.
+6. Lex newly discovered files in parallel.
+7. Parse import summaries for newly discovered files in parallel.
+8. Repeat until the import frontier is empty.
+
+This preserves Wrela's source authority model: if a file is reachable, it is
+reachable because the root image or another reachable file imported it
+explicitly.
+
+The import-summary parser is intentionally small. It consumes semantic tokens
+from a `LexedFile` and extracts only the information needed to continue source
+discovery, such as explicit imports, declared module path if present, and root
+declarations. Full parsing happens later.
+
+The discovery scheduler is graph-aware. The lexer is not. Lexing a file must
+still require only that file's immutable source text. This keeps the lexer fast,
+testable, and safely parallelizable.
+
+Source discovery results should be deterministic:
+
+- file IDs are assigned by stable path/root-discovery order
+- duplicate imports resolve to one source file
+- diagnostics are sorted by stable file ID and span
+- discovered files are reported independently of thread completion order
+
+## Parallel Lexing
+
+The unit of lexer parallelism is the source file.
+
+Parallel lexing across files gives the compiler most of the available speedup
+without complicating tokenization. The lexer should not split a single file into
+parallel chunks in the initial implementation. Strings, block comments, and
+future multiline constructs can cross arbitrary byte positions, making
+intra-file chunking a poor first tradeoff.
+
+The batch lexer should accept already loaded immutable source files and return
+immutable lexed artifacts. It may execute serially at first, but its API should
+make parallel execution natural:
+
+```text
+SourceFile -> LexedFile
+Vec[SourceFile] -> Vec[LexedFile]
+```
+
+When parallel execution is added, it should use the standard library before any
+dependency is considered. Results must be sorted into deterministic file order
+before later phases observe them.
+
+The expected performance posture is:
+
+- handwritten byte-oriented lexing should be very fast
+- trivia preservation should store spans, not copied text
+- disk loading and later parsing/typechecking are likely to dominate before
+  pure tokenization does
+- root-driven frontier expansion creates parallel batches naturally as imports
+  fan out
+- the real compiler-wide win is establishing immutable file artifacts and
+  deterministic merge points from the first phase
+
 ## Build Modes
 
 Wrela has two compile modes: dev and release.
@@ -210,6 +283,11 @@ other files. Its output should be a self-contained artifact containing:
 - line-start information
 - recoverable lexer diagnostics
 
+The lexer has no dev/release mode. Lexing is semantic bedrock: the same source
+file must produce the same `LexedFile` regardless of build mode. Dev and release
+can choose different scheduling, optimization, and reporting policies later in
+the pipeline, but they must not change tokenization.
+
 Trivia must be preserved from the beginning. Whitespace, newlines, comments,
 and doc comments are source facts needed by formatters, diagnostics, editor
 tooling, and possible documentation tooling. The parser can consume a clean
@@ -248,6 +326,7 @@ Benefits:
 - Small audit surface.
 - Fewer transitive maintenance surprises.
 - Compiler architecture stays visible while the language is still forming.
+- Root image files remain the only source of reachability.
 - The compiler can become parallel without redesigning its phase boundaries.
 - Dev builds stay fast while release builds have room for deeper production
   work.
@@ -265,6 +344,8 @@ Costs:
 - More care is required to keep phase artifacts immutable and merge points
   deterministic.
 - Preserving trivia increases lexer output size.
+- Root-driven discovery requires an import-summary parser before the full parser
+  exists.
 - Dev and release modes must be tested against the same semantic rules so they
   do not drift.
 
