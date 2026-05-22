@@ -79,6 +79,10 @@ impl<'a> Lexer<'a> {
                 self.scan_whitespace(start);
             } else if is_newline_start(byte) {
                 self.scan_newline(start);
+            } else if byte == b'"' {
+                self.scan_string(start);
+            } else if byte.is_ascii_digit() {
+                self.scan_integer(start);
             } else if is_ident_start(byte) {
                 self.scan_identifier(start);
             } else if byte == b'/'
@@ -152,6 +156,92 @@ impl<'a> Lexer<'a> {
             self.cursor += 1;
         }
         self.push_trivia(TriviaKind::Newline, start, self.cursor);
+    }
+
+    fn scan_integer(&mut self, start: usize) {
+        if self.bytes[start] == b'0' && self.bytes.get(start + 1) == Some(&b'x') {
+            self.cursor = start + 2;
+            if !self
+                .bytes
+                .get(self.cursor)
+                .is_some_and(|&byte| is_hex_digit(byte))
+            {
+                self.diagnostics.push(Diagnostic::error(
+                    self.span(start, self.cursor),
+                    "hex literal requires digits",
+                ));
+            }
+            while self.bytes.get(self.cursor).is_some_and(|&byte| {
+                is_hex_digit(byte) || byte == b'_'
+            }) {
+                self.cursor += 1;
+            }
+        } else {
+            self.cursor = start + 1;
+            while self.bytes.get(self.cursor).is_some_and(|&byte| {
+                byte.is_ascii_digit() || byte == b'_'
+            }) {
+                self.cursor += 1;
+            }
+        }
+
+        if self.cursor > start && self.bytes[self.cursor - 1] == b'_' {
+            self.diagnostics.push(Diagnostic::error(
+                self.span(start, self.cursor),
+                "numeric literal cannot end with underscore",
+            ));
+        }
+
+        self.push_token(TokenKind::IntLiteral, start, self.cursor);
+    }
+
+    fn scan_string(&mut self, start: usize) {
+        debug_assert_eq!(self.bytes[start], b'"');
+        self.cursor = start + 1;
+        let mut closed = false;
+
+        while self.cursor < self.bytes.len() {
+            let byte = self.bytes[self.cursor];
+            if byte == b'"' {
+                self.cursor += 1;
+                closed = true;
+                break;
+            }
+            if is_newline_start(byte) {
+                break;
+            }
+            if byte == b'\\' {
+                let escape_start = self.cursor;
+                self.cursor += 1;
+                if self.cursor >= self.bytes.len() {
+                    break;
+                }
+                let escaped = self.bytes[self.cursor];
+                if matches!(
+                    escaped,
+                    b'\\' | b'"' | b'n' | b'r' | b't' | b'0'
+                ) {
+                    self.cursor += 1;
+                } else {
+                    self.diagnostics.push(Diagnostic::error(
+                        self.span(escape_start, self.cursor + 1),
+                        "invalid string escape",
+                    ));
+                    self.cursor += 1;
+                }
+                continue;
+            }
+            self.cursor += 1;
+        }
+
+        if !closed {
+            self.diagnostics.push(Diagnostic::error(
+                self.span(start, self.cursor),
+                "unterminated string literal",
+            ));
+        }
+
+        self.push_token(TokenKind::StringLiteral, start, self.cursor);
     }
 
     fn scan_identifier(&mut self, start: usize) {
@@ -269,6 +359,10 @@ impl<'a> Lexer<'a> {
         self.cursor = start + len;
         Some(punct)
     }
+}
+
+fn is_hex_digit(byte: u8) -> bool {
+    byte.is_ascii_digit() || matches!(byte, b'a'..=b'f' | b'A'..=b'F')
 }
 
 fn is_ident_start(byte: u8) -> bool {
@@ -416,6 +510,54 @@ mod tests {
                 TriviaKind::Newline,
                 TriviaKind::DocComment,
             ]
+        );
+    }
+
+    #[test]
+    fn lexes_string_and_integer_literals() {
+        let source = file("let answer = 42\nlet path = \"disk\"");
+        let lexed = lex_file(&source);
+        let kinds: Vec<TokenKind> = lexed.tokens().iter().map(|token| token.kind()).collect();
+
+        assert!(kinds.contains(&TokenKind::IntLiteral));
+        assert!(kinds.contains(&TokenKind::StringLiteral));
+        assert!(lexed.diagnostics().is_empty());
+    }
+
+    #[test]
+    fn reports_unterminated_string_and_continues() {
+        let source = file("let name = \"unterminated\nclass Next {}");
+        let lexed = lex_file(&source);
+
+        assert!(lexed
+            .tokens()
+            .iter()
+            .any(|token| token.kind() == TokenKind::StringLiteral));
+        assert_eq!(
+            lexed.diagnostics()[0].message(),
+            "unterminated string literal"
+        );
+        assert!(lexed.tokens().iter().any(|token| {
+            token.kind() == TokenKind::Keyword(Keyword::Class)
+        }));
+    }
+
+    #[test]
+    fn reports_invalid_escape() {
+        let source = file("\"bad\\q\"");
+        let lexed = lex_file(&source);
+
+        assert_eq!(lexed.diagnostics()[0].message(), "invalid string escape");
+    }
+
+    #[test]
+    fn reports_trailing_numeric_underscore() {
+        let source = file("123_");
+        let lexed = lex_file(&source);
+
+        assert_eq!(
+            lexed.diagnostics()[0].message(),
+            "numeric literal cannot end with underscore"
         );
     }
 }
