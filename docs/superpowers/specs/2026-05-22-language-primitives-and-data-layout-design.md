@@ -20,6 +20,8 @@ This design captures the initial shape of the language nucleus:
 - Generics are compile-time only and use capitalized constraints.
 - Interface names are static constraints, not hidden runtime field types.
 - Scalar branching uses exhaustive `match`, not a generic `if`.
+- Loops describe work shape through `repeat`, table `for`, `drain`, `reduce`,
+  `scan`, and intentional `loop`.
 - Methods and phase blocks use explicit `return`.
 - Recoverable errors are typed values, not exceptions.
 - Memory is explicit authority, not an ambient allocator.
@@ -480,6 +482,195 @@ The split is:
 
 This keeps state handling exhaustive while leaving vectorizable bulk decisions
 in the table/mask model.
+
+## Loop Shapes
+
+Loops should describe the shape of work, not merely spell "jump backward until a
+mutable condition changes." Wrela should avoid a generic `while` in the initial
+language nucleus. Instead, each loop form tells the compiler what kind of work
+is happening.
+
+The initial loop forms are:
+
+- `repeat N as i`: finite counted work.
+- `for row in table.rows(mask)`: finite table-row work over compiler-owned row
+  tokens.
+- `drain queue.up_to(N) as item`: finite systems batch work from a queue, ring,
+  topic, or ready list.
+- `reduce rows as acc { body }`: finite accumulation over rows, bytes, or other
+  bounded ranges.
+- `scan bytes as i until predicate { body }`: bounded sentinel search over a
+  contiguous byte range.
+- `loop`: intentional unbounded control flow.
+
+This gives the compiler stronger facts than a traditional `for` loop:
+
+- Known trip counts or upper bounds.
+- Bounded latency for interrupt and executor work.
+- Valid index or row-token ranges.
+- Row tokens that cannot escape or become pointers.
+- Reduction operations that can be checked before reordering or vectorizing.
+- Sentinel scans that can lower to scalar, NEON, or target-specific search
+  kernels.
+- Clear separation between finite work and intentional event loops.
+
+### Counted Loops
+
+`repeat` is for finite counted work. The count is evaluated before the loop and
+cannot be mutated by the body.
+
+```wrela
+class BufferFill {
+    fn zero(read self, bytes: Buffer[U8]) -> None {
+        repeat bytes.len as i {
+            bytes[i] = 0
+        }
+
+        return None
+    }
+}
+```
+
+When the count is a constant or capacity generic, the compiler can unroll,
+peel, vectorize, and remove redundant bounds checks. Nested `repeat` loops have
+explicit product bounds, which also helps frame-memory and latency analysis.
+
+### Table Row Loops
+
+Table loops iterate over logical rows without exposing row addresses. The loop
+variable is a row token owned by the compiler. It can index columns in the table
+it came from, but it cannot be stored, returned, published, or converted to a
+pointer.
+
+```wrela
+class TimerTableOps {
+    fn mark_ready_rows(read self, timers: Table[TimerEntry, 4096], now: Tick) -> None {
+        let expired = timers.deadline <= now
+
+        for row in timers.rows(expired) {
+            timers.state[row] = TimerState.Ready
+        }
+
+        return None
+    }
+}
+```
+
+For simple column operations, direct mask assignment remains preferable:
+`timers.state[expired] = TimerState.Ready`. Row loops are the imperative escape
+hatch when each selected row needs more work.
+
+### Drain Loops
+
+`drain` is for bounded systems batches. It removes or claims up to a declared
+number of items from a source and runs the body for each item actually obtained.
+
+```wrela
+interface PacketHandler {
+    fn handle(mut self, packet: Packet) -> None
+}
+
+class PacketPump<H: PacketHandler> {
+    queue: PacketQueue
+    handler: H
+
+    fn poll(mut self) -> None {
+        drain queue.up_to(64) as packet {
+            handler.handle(packet = packet)
+        }
+
+        return None
+    }
+}
+```
+
+The bound is part of the program's latency contract. The compiler and image
+diagnostics can reason about worst-case work per poll, interrupt, executor tick,
+or hosted test step.
+
+### Reductions
+
+`reduce` is for bounded accumulation. The source is a finite range such as table
+rows, bytes, lanes, or a bounded batch. The accumulator is explicit, and the
+compiler may only reorder or vectorize the reduction when the accumulator
+operation's semantics allow it.
+
+```wrela
+class PacketStats {
+    fn total_length(read self, packets: Table[Packet, 256]) -> U64 {
+        let valid = packets.flags.has(PacketFlag.Valid)
+
+        let total = reduce packets.rows(valid) as acc: U64 = 0 {
+            acc += packets.length[row]
+        }
+
+        return total
+    }
+}
+```
+
+For table-row reductions, the selected row token is available as `row` inside
+the block. For byte reductions, the index token is available under the name
+chosen by the source form.
+
+Integer wrapping addition, bitwise operations, min/max, count, any, and all are
+good initial reduction targets. Floating-point and saturating arithmetic should
+not be reassociated unless their types or operations explicitly permit that.
+
+### Scans
+
+`scan` is for bounded sentinel search. It walks a finite byte range in order,
+stops when the `until` predicate is true, and returns a closed result that
+distinguishes found from missing.
+
+```wrela
+interface ByteScanSink {
+    fn observe(mut self, byte: U8) -> None
+}
+
+class ByteScanner<S: ByteScanSink> {
+    sink: S
+
+    fn find_nul(mut self, bytes: Buffer[U8]) -> Option[U32] {
+        let found = scan bytes as i until bytes[i] == 0 {
+            sink.observe(byte = bytes[i])
+        }
+
+        match found {
+            Scan.Found(i) => return Some(i)
+            Scan.Missing => return None
+        }
+    }
+}
+```
+
+The body runs for elements that have not satisfied the predicate. Pure scans can
+lower to vectorized compare/search kernels. Scans with side effects remain
+bounded and analyzable, but the effects constrain reordering.
+
+### Intentional Control Loops
+
+`loop` is the explicit unbounded form. It is appropriate for event loops,
+driver state machines, executor dispatch, and appliance control flow.
+
+```wrela
+class ExecutorLoop<D: Dispatcher> {
+    dispatcher: D
+    executor: Executor
+
+    fn run(mut self) -> Never {
+        loop {
+            let event = executor.next()
+            dispatcher.handle(event = event)
+        }
+    }
+}
+```
+
+The compiler should not try to prove that `loop` terminates. It should instead
+treat it as intentional non-termination unless the body exits with `return`,
+`break`, or `trap`. Bounded retry and polling should usually be expressed with
+`repeat Attempts as attempt`, not open-ended `loop`.
 
 ## Return
 
@@ -1184,6 +1375,9 @@ This design does not require:
 - Array-of-structs layout for logical bulk data.
 - Host-specific SIMD behavior hidden behind the test runner.
 - Generic `if` as a separate core branching primitive.
+- Generic `while` as a core loop primitive in the initial language.
+- A traditional unbounded `for` loop as the default iteration form.
+- Proving termination for intentional `loop` bodies.
 - Exceptions or hidden stack unwinding.
 - Ambient panic or process-exit behavior.
 - Top-level free functions.
@@ -1216,6 +1410,8 @@ The first language nucleus should include:
   `read`.
 - `unique class` for authority-bearing owners with graph checks.
 - `match` as the core exhaustive scalar branching form.
+- work-shaped loops: `repeat`, table-row `for`, `drain`, `reduce`, `scan`, and
+  intentional `loop`.
 - `return` as an explicit keyword in normal control flow.
 - `Option[T]`, `Result[T, E]`, and closed `error` sums.
 - `try`, `try else return`, and expanded `try else err { ... }`.
@@ -1242,9 +1438,15 @@ The next design pass should settle:
 - Exact `Index` strategy syntax and whether strategy is a type, constructor, or
   policy field.
 - Whether `Mask` is parameterized by capacity, table identity, or lane count.
-- How table row iteration works without exposing row addresses.
+- Exact row-token type rules for table iteration without exposing row
+  addresses.
 - How table columns interact with ownership and borrowing.
 - How masked writes report or forbid overlapping aliases.
+- Exact syntax for reduction accumulator seeds and custom reduction operators.
+- Exact result type names for `scan` and whether scans can omit an empty body.
+- Exact `break` and `continue` rules for `repeat`, table `for`, `drain`,
+  `reduce`, `scan`, and `loop`.
+- Whether retry/poll loops need additional diagnostics beyond bounded `repeat`.
 - Exact lifetime notation and diagnostics for `read` fields and borrowed class
   dependencies.
 - Whether any class field mode beyond owned and `read` should exist after v1.
