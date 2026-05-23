@@ -3,10 +3,10 @@
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-WORKTREE="${1:-$REPO_ROOT/.worktrees/feat-lexer-and-rust-setup}"
 PLAN="${2:-docs/implementation/plans/2026-05-22-lexer-and-initial-rust-setup.md}"
 SLUG="$(basename "$PLAN" .md)"
 SMOKE_DIR="$(mktemp -d "${TMPDIR:-/tmp}/plan-review-smoke.XXXXXX")"
+TEMP_WORKTREE=0
 
 pass=0
 fail=0
@@ -14,8 +14,29 @@ fail=0
 ok() { echo "  PASS: $1"; pass=$((pass + 1)); }
 bad() { echo "  FAIL: $1" >&2; fail=$((fail + 1)); }
 
-cleanup() { rm -rf "$SMOKE_DIR"; }
+cleanup() {
+  if [[ "$TEMP_WORKTREE" == "1" && -d "${WORKTREE:-}" ]]; then
+    git -C "$REPO_ROOT" worktree remove --force "$WORKTREE" 2>/dev/null || true
+  fi
+  rm -rf "$SMOKE_DIR"
+}
 trap cleanup EXIT
+
+# Worktree: use arg1 if provided and exists; otherwise create a detached temp worktree.
+if [[ $# -ge 1 && "$1" != -* && -d "$1" ]]; then
+  WORKTREE="$(cd "$1" && pwd)"
+  shift
+  PLAN="${1:-$PLAN}"
+else
+  WORKTREE="$SMOKE_DIR/worktree"
+  git -C "$REPO_ROOT" worktree add --detach "$WORKTREE" HEAD >/dev/null
+  TEMP_WORKTREE=1
+  mkdir -p "$WORKTREE/docs/implementation/reviews"
+  cat > "$WORKTREE/docs/implementation/reviews/${SLUG}-review-self-thermonuclear.md" <<EOF
+# Smoke test stub (Phase A)
+## Verdict: APPROVED
+EOF
+fi
 
 echo "=== plan-review smoke test ==="
 echo "repo:     $REPO_ROOT"
@@ -26,7 +47,13 @@ echo ""
 
 # 1. Scripts exist and are executable
 echo "[1] Script presence"
-for s in plan-review.sh plan-review-check-phase-a.sh plan-review-save-verification.sh; do
+for s in \
+  quality-gate.sh \
+  plan-worktree-new.sh \
+  plan-review.sh \
+  plan-review-check-phase-a.sh \
+  plan-review-save-verification.sh \
+  plan-review-cleanup.sh; do
   if [[ -x "$REPO_ROOT/scripts/$s" ]]; then
     ok "scripts/$s executable"
   else
@@ -34,7 +61,7 @@ for s in plan-review.sh plan-review-check-phase-a.sh plan-review-save-verificati
   fi
 done
 
-# 2. Phase A gate — should pass on real worktree
+# 2. Phase A gate — should pass on worktree with stub verdict
 echo ""
 echo "[2] Phase A gate (expect APPROVED on worktree)"
 if "$REPO_ROOT/scripts/plan-review-check-phase-a.sh" "$WORKTREE" "$PLAN" >/dev/null 2>&1; then
@@ -48,7 +75,11 @@ echo ""
 echo "[3] Phase A gate rejects missing verdict"
 FAKE_WT="$SMOKE_DIR/fake-worktree"
 mkdir -p "$FAKE_WT/docs/implementation/reviews"
-git -C "$WORKTREE" rev-parse --git-dir > "$FAKE_WT/.git"
+if [[ -f "$WORKTREE/.git" ]]; then
+  cp "$WORKTREE/.git" "$FAKE_WT/.git"
+else
+  echo "gitdir: $(git -C "$WORKTREE" rev-parse --git-dir)" > "$FAKE_WT/.git"
+fi
 if "$REPO_ROOT/scripts/plan-review-check-phase-a.sh" "$FAKE_WT" "$PLAN" >/dev/null 2>&1; then
   bad "check-phase-a should fail without verdict file"
 else
@@ -75,7 +106,11 @@ echo ""
 echo "[5] plan-review.sh blocks without Phase A verdict"
 BLOCK_WT="$SMOKE_DIR/block-worktree"
 mkdir -p "$BLOCK_WT/docs/implementation/reviews"
-cp "$WORKTREE/.git" "$BLOCK_WT/.git" 2>/dev/null || echo "gitdir: $(git -C "$WORKTREE" rev-parse --git-dir)" > "$BLOCK_WT/.git"
+if [[ -f "$WORKTREE/.git" ]]; then
+  cp "$WORKTREE/.git" "$BLOCK_WT/.git"
+else
+  echo "gitdir: $(git -C "$WORKTREE" rev-parse --git-dir)" > "$BLOCK_WT/.git"
+fi
 if PLAN_REVIEW_SKIP_CLAUDE=1 PLAN_REVIEW_SKIP_CODEX=1 \
   "$REPO_ROOT/scripts/plan-review.sh" "$PLAN" "$BLOCK_WT" >/dev/null 2>&1; then
   bad "plan-review.sh should fail without Phase A file"
@@ -109,7 +144,6 @@ else
 fi
 
 # 7. Codex CLI minimal invoke
-# Codex exec reads stdin when attached; close it or the command hangs in CI/automation.
 echo ""
 echo "[7] Codex CLI smoke (minimal exec)"
 CODEX_BIN="${CODEX_BIN:-codex}"

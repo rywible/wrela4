@@ -7,7 +7,7 @@ alwaysApply: true
 
 When executing a plan from `docs/implementation/plans/`:
 
-1. Read `.cursor/skills/multi-model-plan-review/SKILL.md` — especially **Strict sequencing** and **Autonomous review loops**
+1. Read [`AGENTS.md`](../../AGENTS.md) and `.cursor/skills/multi-model-plan-review/SKILL.md`
 2. **Phase A and Phase B must be separate assistant turns** on first pass (do not start Phase B in the same message as writing Phase A)
 3. Phase A: thermo-nuclear self review → write `*-review-self-thermonuclear.md` with `## Verdict: APPROVED`
 4. Phase B: `plan-review-check-phase-a.sh` → `plan-review.sh` (Claude + Codex in parallel)

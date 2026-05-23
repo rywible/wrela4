@@ -82,7 +82,7 @@ After **any** fix driven by Phase A or Phase B feedback, the orchestrator must *
 
 ```text
 fix required items
-  → run quality gate (fmt, check, clippy, test, clean status)
+  → run ./scripts/quality-gate.sh
   → re-run thermo-nuclear self review
   → write/update *-review-self-thermonuclear.md
   → repeat until ## Verdict: APPROVED
@@ -137,10 +137,15 @@ Write `<slug>-plan-amendment.md` using `docs/implementation/reviews/plan-amendme
 ## Phase B: External reviews
 
 ```bash
+./scripts/plan-worktree-new.sh feat/branch          # before implementation
+./scripts/quality-gate.sh                           # during implementation
 ./scripts/plan-review-save-verification.sh docs/implementation/plans/YYYY-MM-DD-feature.md .worktrees/feat-branch
 ./scripts/plan-review-check-phase-a.sh .worktrees/feat-branch docs/implementation/plans/YYYY-MM-DD-feature.md
 ./scripts/plan-review.sh docs/implementation/plans/YYYY-MM-DD-feature.md .worktrees/feat-branch
+./scripts/plan-review-cleanup.sh .worktrees/feat-branch docs/implementation/plans/YYYY-MM-DD-feature.md
 ```
+
+There is no CI. `./scripts/quality-gate.sh` is the canonical verifier.
 
 ## Default models
 
@@ -152,7 +157,7 @@ Write `<slug>-plan-amendment.md` using `docs/implementation/reviews/plan-amendme
 
 ## Orchestrator checklist
 
-**Phase A:** quality gate → thermo-nuclear review → verdict on disk → APPROVED → amendment if needed → **stop turn** (unless looping after a fix — then continue Phase A loop without returning)
+**Phase A:** `./scripts/quality-gate.sh` → thermo-nuclear review → verdict on disk → APPROVED → amendment if needed
 
 **Phase B:** verification log → check-phase-a → plan-review.sh → if either REJECTED → fix → commit → Phase A loop → Phase B loop → **only return when both APPROVED**
 
@@ -192,7 +197,7 @@ git checkout main
 git merge feat/branch --no-ff -m "feat: ..."
 ```
 
-Resolve conflicts if any; re-run quality gate on `main`.
+Resolve conflicts if any; re-run `./scripts/quality-gate.sh` on `main`.
 
 ### 3. Remove worktree
 

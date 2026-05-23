@@ -29,13 +29,13 @@ Turn 3+ Phase B only  → plan-review.sh (Claude + Codex in parallel)
 After **any** fix from Phase A or Phase B feedback, the orchestrator loops autonomously until the gate passes. Do not return to the user mid-loop.
 
 ```text
-Phase A fix  → quality gate → re-write self verdict → repeat until APPROVED
+Phase A fix  → ./scripts/quality-gate.sh → re-write self verdict → repeat until APPROVED
 Phase B fix  → commit → Phase A loop → Phase B loop → repeat until Claude AND Codex APPROVED
 ```
 
 | Trigger | Action |
 |---------|--------|
-| Phase A REJECTED | Fix → quality gate → re-write verdict → loop |
+| Phase A REJECTED | Fix → `./scripts/quality-gate.sh` → re-write verdict → loop |
 | Either Phase B REJECTED | Fix all required items → commit → Phase A loop → re-run **both** Claude and Codex |
 | Gate passed | Phase A APPROVED + Claude APPROVED + Codex APPROVED |
 
@@ -90,5 +90,7 @@ Interim review outputs are ephemeral — only templates and this README belong o
 | `PLAN_REVIEW_SKIP_CODEX` | `0` |
 
 Smoke test: `./scripts/plan-review-smoke-test.sh`
+
+There is **no CI** — run `./scripts/quality-gate.sh` locally before merge.
 
 See `.cursor/skills/multi-model-plan-review/SKILL.md` for full rules.

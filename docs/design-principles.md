@@ -9,8 +9,10 @@ the subfolders below.
 
 | Path | Contents |
 |------|----------|
-| [`design/`](design/) | Language and test design, architecture decisions |
-| [`implementation/`](implementation/) | Implementation plans and plan-review harness |
+| [`design/`](design/) | Language spec, ADRs, architecture, locked decisions, supported syntax subset |
+| [`implementation/`](implementation/) | Implementation plans, roadmap, plan-review harness |
+
+Agent onboarding: [`../AGENTS.md`](../AGENTS.md).
 
 ## Language principles
 
@@ -55,12 +57,20 @@ project, not a wrapper around a separate service.
 See [`design/0001-rust-command-center-and-zero-dependency-nucleus.md`](design/0001-rust-command-center-and-zero-dependency-nucleus.md)
 for the accepted toolchain decision.
 
+Locked rules for agents: [`design/locked-decisions.md`](design/locked-decisions.md).
+
+Pipeline overview: [`design/compiler-pipeline.md`](design/compiler-pipeline.md).
+
 ## Implementation workflow
 
 Implementation plans live under [`implementation/plans/`](implementation/plans/).
+See [`implementation/README.md`](implementation/README.md) for status and workflow.
+
 Each plan is executed in an isolated worktree, passes thermo-nuclear self review
 (Phase A) and independent Claude + Codex review (Phase B), then merges to
 `main` after interim review artifacts are deleted.
+
+There is **no CI** — `./scripts/quality-gate.sh` is the verifier.
 
 See [`implementation/reviews/README.md`](implementation/reviews/README.md) for
 the review gate and cleanup steps.

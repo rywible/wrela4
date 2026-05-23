@@ -17,35 +17,7 @@ mkdir -p "$(dirname "$OUT")"
   echo "plan: $PLAN"
   echo "worktree: $WORKTREE"
   echo ""
-
-  cd "$WORKTREE"
-
-  if [[ -f Cargo.toml ]]; then
-    echo "--- cargo fmt --check ---"
-    cargo fmt --check && echo "PASS" || echo "FAIL"
-    echo ""
-
-    echo "--- RUSTFLAGS=-D warnings cargo check --all-targets ---"
-    RUSTFLAGS="-D warnings" cargo check --all-targets && echo "PASS" || echo "FAIL"
-    echo ""
-
-    echo "--- cargo clippy --all-targets -- -D warnings ---"
-    cargo clippy --all-targets -- -D warnings && echo "PASS" || echo "FAIL"
-    echo ""
-
-    echo "--- cargo test ---"
-    cargo test -- --nocapture 2>&1 | tail -30
-    echo ""
-
-    echo "--- rg todo/unimplemented/unsafe ---"
-    rg -n '\b(todo!|unimplemented!)\s*\(|\bunsafe\b' src --glob '*.rs' 2>/dev/null || echo "PASS (no matches)"
-    echo ""
-
-    echo "--- cargo metadata --no-deps ---"
-    cargo metadata --no-deps --format-version 1 | rg '"name":"wrela"' || true
-  else
-    echo "(no Cargo.toml — add project-specific verification commands)"
-  fi
-} > "$OUT" 2>&1
+  "$SCRIPT_ROOT/scripts/quality-gate.sh" "$WORKTREE"
+} > "$OUT" 2>&1 || true
 
 echo "Wrote $OUT"

@@ -1,0 +1,51 @@
+---
+description: Wrela Rust implementation conventions for the command center
+alwaysApply: true
+---
+
+# Wrela Rust conventions
+
+Read [`AGENTS.md`](../../AGENTS.md) and [`docs/design/locked-decisions.md`](../../docs/design/locked-decisions.md) first.
+
+## Phase boundaries
+
+- Compiler phases return data (`Diagnostic`, `LexedFile`, `DiscoverResult`, etc.).
+- Only `command.rs` writes to stdout/stderr or chooses process exit codes.
+- Do not add `println!` / `eprintln!` in `src/` outside `command.rs`.
+
+## Data and immutability
+
+- Phase outputs are owned structs; later phases read them, they do not mutate in place.
+- Prefer explicit inputs over global state.
+
+## Spans and source
+
+- `Span` uses `u32` byte offsets into `SourceFile` text.
+- Spans must start and end on UTF-8 character boundaries (`is_char_boundary`).
+- Tokens and trivia store `Span` only — no copied lexeme text in token structs.
+
+## Diagnostics
+
+- Use `Diagnostic::error(span, message)` for recoverable issues; continue when the plan says to.
+- Use unspanned diagnostics when no valid `FileId` exists (e.g. root load failure).
+- Merge order must stay deterministic when combining phase diagnostics.
+
+## Dependencies and safety
+
+- Do not add `[dependencies]` without a new ADR in `docs/design/`.
+- No `unsafe`, `todo!()`, or `unimplemented!()` in production `src/`.
+
+## Testing
+
+- Unit tests: colocated in `#[cfg(test)] mod tests` in the same file.
+- Integration tests: `tests/*.rs` using the public crate API only (`use wrela::...`).
+- Fixtures live under `fixtures/`; prefer real `.wrela` files over inline strings for integration coverage.
+
+## Quality gate
+
+There is no CI. Run `./scripts/quality-gate.sh` before claiming work complete.
+
+## Plan work
+
+- Implement plans in an isolated worktree (`./scripts/plan-worktree-new.sh`).
+- Complete the multi-model review gate before merge; loop autonomously on review fixes.
