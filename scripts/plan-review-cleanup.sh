@@ -15,7 +15,7 @@ Removes ephemeral review outputs for the plan slug:
   *-plan-amendment.md
   *-verification.log
 
-Templates under docs/superpowers/reviews/ on main are not touched.
+Templates under docs/implementation/reviews/ on main are not touched.
 EOF
 }
 
@@ -30,7 +30,7 @@ PLAN_PATH="$2"
 WORKTREE="$(cd "$WORKTREE" && pwd)"
 PLAN_BASENAME="$(basename "$PLAN_PATH" .md)"
 SLUG="$PLAN_BASENAME"
-REVIEWS_DIR="$WORKTREE/docs/superpowers/reviews"
+REVIEWS_DIR="$WORKTREE/docs/implementation/reviews"
 
 if [[ ! -d "$REVIEWS_DIR" ]]; then
   echo "nothing to clean: $REVIEWS_DIR does not exist"

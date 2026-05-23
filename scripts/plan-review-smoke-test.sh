@@ -4,7 +4,7 @@ set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 WORKTREE="${1:-$REPO_ROOT/.worktrees/feat-lexer-and-rust-setup}"
-PLAN="${2:-docs/superpowers/plans/2026-05-22-lexer-and-initial-rust-setup.md}"
+PLAN="${2:-docs/implementation/plans/2026-05-22-lexer-and-initial-rust-setup.md}"
 SLUG="$(basename "$PLAN" .md)"
 SMOKE_DIR="$(mktemp -d "${TMPDIR:-/tmp}/plan-review-smoke.XXXXXX")"
 
@@ -47,7 +47,7 @@ fi
 echo ""
 echo "[3] Phase A gate rejects missing verdict"
 FAKE_WT="$SMOKE_DIR/fake-worktree"
-mkdir -p "$FAKE_WT/docs/superpowers/reviews"
+mkdir -p "$FAKE_WT/docs/implementation/reviews"
 git -C "$WORKTREE" rev-parse --git-dir > "$FAKE_WT/.git"
 if "$REPO_ROOT/scripts/plan-review-check-phase-a.sh" "$FAKE_WT" "$PLAN" >/dev/null 2>&1; then
   bad "check-phase-a should fail without verdict file"
@@ -60,7 +60,7 @@ echo ""
 echo "[4] Packet generation (skip Claude/Codex)"
 if PLAN_REVIEW_SKIP_CLAUDE=1 PLAN_REVIEW_SKIP_CODEX=1 \
   "$REPO_ROOT/scripts/plan-review.sh" "$PLAN" "$WORKTREE" >/dev/null 2>&1; then
-  PACKET="$WORKTREE/docs/superpowers/reviews/${SLUG}-review-packet.md"
+  PACKET="$WORKTREE/docs/implementation/reviews/${SLUG}-review-packet.md"
   if [[ -s "$PACKET" ]] && rg -q '^# Independent Plan Review' "$PACKET"; then
     ok "review packet generated ($PACKET)"
   else
@@ -74,7 +74,7 @@ fi
 echo ""
 echo "[5] plan-review.sh blocks without Phase A verdict"
 BLOCK_WT="$SMOKE_DIR/block-worktree"
-mkdir -p "$BLOCK_WT/docs/superpowers/reviews"
+mkdir -p "$BLOCK_WT/docs/implementation/reviews"
 cp "$WORKTREE/.git" "$BLOCK_WT/.git" 2>/dev/null || echo "gitdir: $(git -C "$WORKTREE" rev-parse --git-dir)" > "$BLOCK_WT/.git"
 if PLAN_REVIEW_SKIP_CLAUDE=1 PLAN_REVIEW_SKIP_CODEX=1 \
   "$REPO_ROOT/scripts/plan-review.sh" "$PLAN" "$BLOCK_WT" >/dev/null 2>&1; then

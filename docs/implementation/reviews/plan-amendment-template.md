@@ -1,7 +1,7 @@
 # Plan amendment
 
 <!-- Written during Phase A when code-judo simplifications change plan assumptions.
-     Path: docs/superpowers/reviews/<slug>-plan-amendment.md
+     Path: docs/implementation/reviews/<slug>-plan-amendment.md
      Include in Phase B review packet when present. -->
 
 ## Plan reference

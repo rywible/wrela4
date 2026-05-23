@@ -13,7 +13,7 @@ Run this (or rely on plan-review.sh's built-in gate) before starting Phase B.
 Example:
   ./scripts/plan-review-check-phase-a.sh \
     .worktrees/feat-branch \
-    docs/superpowers/plans/2026-05-22-feature.md
+    docs/implementation/plans/2026-05-22-feature.md
 EOF
 }
 
@@ -25,7 +25,7 @@ fi
 WORKTREE="$(cd "$1" && pwd)"
 PLAN_PATH="$2"
 SLUG="$(basename "$PLAN_PATH" .md)"
-SELF_OUT="$WORKTREE/docs/superpowers/reviews/${SLUG}-review-self-thermonuclear.md"
+SELF_OUT="$WORKTREE/docs/implementation/reviews/${SLUG}-review-self-thermonuclear.md"
 
 if [[ ! -f "$SELF_OUT" ]]; then
   echo "PHASE_A: MISSING" >&2

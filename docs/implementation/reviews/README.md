@@ -49,7 +49,7 @@ After both Phase B reviewers APPROVED:
 3. **Remove** the worktree and delete the merged branch
 
 ```bash
-./scripts/plan-review-cleanup.sh .worktrees/feat-branch docs/superpowers/plans/PLAN.md
+./scripts/plan-review-cleanup.sh .worktrees/feat-branch docs/implementation/plans/PLAN.md
 git checkout main && git merge feat/branch --no-ff
 git worktree remove .worktrees/feat-branch
 git branch -d feat/branch
@@ -71,11 +71,11 @@ Interim review outputs are ephemeral — only templates and this README belong o
 # Turn 1: Phase A (orchestrator) — write self review + optional amendment
 
 # Turn 2: Verify
-./scripts/plan-review-check-phase-a.sh .worktrees/feat-branch docs/superpowers/plans/PLAN.md
+./scripts/plan-review-check-phase-a.sh .worktrees/feat-branch docs/implementation/plans/PLAN.md
 
 # Turn 3+: Phase B
-./scripts/plan-review-save-verification.sh docs/superpowers/plans/PLAN.md .worktrees/feat-branch
-./scripts/plan-review.sh docs/superpowers/plans/PLAN.md .worktrees/feat-branch
+./scripts/plan-review-save-verification.sh docs/implementation/plans/PLAN.md .worktrees/feat-branch
+./scripts/plan-review.sh docs/implementation/plans/PLAN.md .worktrees/feat-branch
 ```
 
 ## Configuration

@@ -5,7 +5,7 @@ alwaysApply: true
 
 # Plan completion review gate
 
-When executing a plan from `docs/superpowers/plans/`:
+When executing a plan from `docs/implementation/plans/`:
 
 1. Read `.cursor/skills/multi-model-plan-review/SKILL.md` — especially **Strict sequencing** and **Autonomous review loops**
 2. **Phase A and Phase B must be separate assistant turns** on first pass (do not start Phase B in the same message as writing Phase A)

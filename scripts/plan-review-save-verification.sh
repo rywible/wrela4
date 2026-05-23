@@ -8,7 +8,7 @@ WORKTREE="${2:?worktree path required}"
 SCRIPT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 WORKTREE="$(cd "$WORKTREE" && pwd)"
 SLUG="$(basename "$PLAN" .md)"
-OUT="$WORKTREE/docs/superpowers/reviews/${SLUG}-verification.log"
+OUT="$WORKTREE/docs/implementation/reviews/${SLUG}-verification.log"
 
 mkdir -p "$(dirname "$OUT")"
 

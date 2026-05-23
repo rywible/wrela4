@@ -1,6 +1,6 @@
 ---
 name: multi-model-plan-review
-description: Run thermo-nuclear self-review then independent plan reviews via Claude Code (Opus max) and Codex (GPT 5.5 xhigh) before marking implementation plans complete. Use when implementing superpowers plans, when the user asks for multi-model review, or before returning from plan execution.
+description: Run thermo-nuclear self-review then independent plan reviews via Claude Code (Opus max) and Codex (GPT 5.5 xhigh) before marking implementation plans complete. Use when implementing plans from docs/implementation/plans/, when the user asks for multi-model review, or before returning from plan execution.
 ---
 
 # Multi-Model Plan Review
@@ -25,7 +25,7 @@ Turn N+2 → Phase B only (plan-review.sh — Claude + Codex)
 ### What Phase A means
 
 - **Who:** the orchestrator (you), using `thermo-nuclear-code-quality-review`
-- **Output:** a file on disk: `<worktree>/docs/superpowers/reviews/<slug>-review-self-thermonuclear.md`
+- **Output:** a file on disk: `<worktree>/docs/implementation/reviews/<slug>-review-self-thermonuclear.md`
 - **Done when:** that file contains a line exactly matching `## Verdict: APPROVED`
 
 ### What Phase B means
@@ -47,7 +47,7 @@ Turn N+2 → Phase B only (plan-review.sh — Claude + Codex)
 ### Required before starting Phase B
 
 ```bash
-./scripts/plan-review-check-phase-a.sh "$WORKTREE" docs/superpowers/plans/<plan>.md
+./scripts/plan-review-check-phase-a.sh "$WORKTREE" docs/implementation/plans/<plan>.md
 ```
 
 ---
@@ -124,22 +124,22 @@ Phase A APPROVED on disk
 
 See skill file at `~/.cursor/plugins/cache/cursor-public/cursor-team-kit/*/skills/thermo-nuclear-code-quality-review/SKILL.md`.
 
-Write verdict to `<worktree>/docs/superpowers/reviews/<slug>-review-self-thermonuclear.md` with `## Verdict: APPROVED | REJECTED`.
+Write verdict to `<worktree>/docs/implementation/reviews/<slug>-review-self-thermonuclear.md` with `## Verdict: APPROVED | REJECTED`.
 
 ### Step A5: Plan amendment (conditional)
 
 **Required when:** code-judo items under `## Missed simplification / code-judo opportunities` were implemented **and** changed plan assumptions.
 
-Write `<slug>-plan-amendment.md` using `docs/superpowers/reviews/plan-amendment-template.md`. Phase B packet auto-includes it for Claude and Codex.
+Write `<slug>-plan-amendment.md` using `docs/implementation/reviews/plan-amendment-template.md`. Phase B packet auto-includes it for Claude and Codex.
 
 ---
 
 ## Phase B: External reviews
 
 ```bash
-./scripts/plan-review-save-verification.sh docs/superpowers/plans/YYYY-MM-DD-feature.md .worktrees/feat-branch
-./scripts/plan-review-check-phase-a.sh .worktrees/feat-branch docs/superpowers/plans/YYYY-MM-DD-feature.md
-./scripts/plan-review.sh docs/superpowers/plans/YYYY-MM-DD-feature.md .worktrees/feat-branch
+./scripts/plan-review-save-verification.sh docs/implementation/plans/YYYY-MM-DD-feature.md .worktrees/feat-branch
+./scripts/plan-review-check-phase-a.sh .worktrees/feat-branch docs/implementation/plans/YYYY-MM-DD-feature.md
+./scripts/plan-review.sh docs/implementation/plans/YYYY-MM-DD-feature.md .worktrees/feat-branch
 ```
 
 ## Default models
@@ -158,7 +158,7 @@ Write `<slug>-plan-amendment.md` using `docs/superpowers/reviews/plan-amendment-
 
 **Phase C (cleanup):** delete interim review artifacts from worktree → merge branch into main → remove worktree
 
-See also: `docs/superpowers/reviews/README.md`
+See also: `docs/implementation/reviews/README.md`
 
 ---
 
@@ -170,7 +170,7 @@ After Phase B passes (Claude **and** Codex APPROVED), clean up before landing on
 
 These are ephemeral audit outputs. **Do not commit or merge them.**
 
-Remove from `<worktree>/docs/superpowers/reviews/`:
+Remove from `<worktree>/docs/implementation/reviews/`:
 
 - `<slug>-review-self-thermonuclear.md`
 - `<slug>-review-claude.md`
@@ -179,10 +179,10 @@ Remove from `<worktree>/docs/superpowers/reviews/`:
 - `<slug>-plan-amendment.md`
 - `<slug>-verification.log`
 
-**Keep on `main`:** templates (`review-*-template.md`, `plan-amendment-template.md`) and `docs/superpowers/reviews/README.md`.
+**Keep on `main`:** templates (`review-*-template.md`, `plan-amendment-template.md`) and `docs/implementation/reviews/README.md`.
 
 ```bash
-./scripts/plan-review-cleanup.sh .worktrees/feat-branch docs/superpowers/plans/PLAN.md
+./scripts/plan-review-cleanup.sh .worktrees/feat-branch docs/implementation/plans/PLAN.md
 ```
 
 ### 2. Merge into main

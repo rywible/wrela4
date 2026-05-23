@@ -21,7 +21,7 @@ Environment:
   PLAN_REVIEW_TASKS          Override "tasks claimed complete" text
   PLAN_REVIEW_VERIFICATION_LOG  Inline verification output for the packet
 
-Outputs (under docs/superpowers/reviews/):
+Outputs (under docs/implementation/reviews/):
   <slug>-review-packet.md
   <slug>-review-claude.md      (if Claude enabled)
   <slug>-review-codex.md       (if Codex enabled)
@@ -86,7 +86,7 @@ fi
 
 PLAN_BASENAME="$(basename "$PLAN_ABS" .md)"
 SLUG="$PLAN_BASENAME"
-REVIEWS_DIR="$WORKTREE/docs/superpowers/reviews"
+REVIEWS_DIR="$WORKTREE/docs/implementation/reviews"
 mkdir -p "$REVIEWS_DIR"
 
 PACKET="$REVIEWS_DIR/${SLUG}-review-packet.md"
