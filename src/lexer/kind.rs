@@ -101,6 +101,8 @@ pub enum Punct {
     Colon,
     Comma,
     Dot,
+    DotDot,
+    DotDotEq,
     Eq,
     EqEq,
     FatArrow,

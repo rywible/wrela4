@@ -309,6 +309,8 @@ impl<'a> Lexer<'a> {
             [b'(', ..] => (Punct::OpenParen, 1),
             [b')', ..] => (Punct::CloseParen, 1),
             [b',', ..] => (Punct::Comma, 1),
+            [b'.', b'.', b'=', ..] => (Punct::DotDotEq, 3),
+            [b'.', b'.', ..] => (Punct::DotDot, 2),
             [b'.', ..] => (Punct::Dot, 1),
             [b':', ..] => (Punct::Colon, 1),
             [b';', ..] => (Punct::Semicolon, 1),
@@ -567,5 +569,24 @@ mod tests {
             lexed.diagnostics()[0].message(),
             "numeric literal cannot end with underscore"
         );
+    }
+
+    #[test]
+    fn lexes_range_punctuation() {
+        let lexed = lex_file(&file("2..=15\n0..count"));
+        let kinds: Vec<TokenKind> = lexed.tokens().iter().map(|token| token.kind()).collect();
+
+        assert!(kinds.contains(&TokenKind::Punct(Punct::DotDotEq)));
+        assert!(kinds.contains(&TokenKind::Punct(Punct::DotDot)));
+    }
+
+    #[test]
+    fn lexes_dotted_module_path_without_range_tokens() {
+        let lexed = lex_file(&file("from app.console"));
+        let kinds: Vec<TokenKind> = lexed.tokens().iter().map(|token| token.kind()).collect();
+
+        assert!(kinds.contains(&TokenKind::Punct(Punct::Dot)));
+        assert!(!kinds.contains(&TokenKind::Punct(Punct::DotDot)));
+        assert!(!kinds.contains(&TokenKind::Punct(Punct::DotDotEq)));
     }
 }
