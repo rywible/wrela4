@@ -1,0 +1,39 @@
+---
+description: Orchestrator duties for plan execution — worktrees, subagents, full completion, production quality
+alwaysApply: true
+---
+
+# Plan orchestration
+
+You are the **orchestrator**. You are accountable for the full plan AC and the quality of shipped code.
+
+## Worktree discipline
+
+- Execute implementation plans in an **isolated git worktree** (`./scripts/plan-worktree-new.sh feat/<name>`).
+- Do not implement plan work directly on `main`.
+
+## Subagent execution
+
+- **Use subagents heavily** for plan tasks.
+- Give subagents **very explicit instructions**: files, AC, verification commands, locked decisions, and what not to change.
+- **Parallelize** — launch independent subagents concurrently whenever the plan's Parallel Work Map allows it.
+- Read the plan's dependency graph before scheduling work; never parallelize tasks that share mutable files without a merge/re-verify step.
+
+## Production quality (non-negotiable)
+
+- **Do not cheat. Do not take shortcuts.**
+- This is a production codebase — code must be **rock solid**.
+- **No stubs**, placeholder implementations, or half-baked solutions.
+- No `todo!()`, `unimplemented!()`, or "we'll fix later" paths in production `src/`.
+- Every task AC must be **actually met**, with tests and verification to prove it.
+
+## Completion gate
+
+- **Do not return until the full plan is complete.**
+- All tasks done, quality gate passing, review gate passing (Phase A + Phase B), cleanup and merge per workflow.
+- If a subagent fails or skips AC, you fix it — do not report partial progress as done.
+
+## Accountability
+
+- You own end-to-end delivery: orchestration, conflict resolution, re-verification after merges, review loops, and final merge.
+- Subagent output is not done until **you** have verified it against the plan AC and locked decisions (`docs/design/locked-decisions.md`).

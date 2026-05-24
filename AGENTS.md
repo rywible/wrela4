@@ -72,6 +72,9 @@ QUALITY_GATE_STRICT_CLEAN=1 ./scripts/quality-gate.sh
 
 ## Implementing a plan
 
+You are the **orchestrator** — accountable for full plan AC and production quality.
+See [`.cursor/rules/plan-orchestration.mdc`](.cursor/rules/plan-orchestration.mdc).
+
 1. Create an isolated worktree:
 
    ```bash
@@ -100,8 +103,3 @@ cargo run -- dump tokens fixtures/lexer/basic.wrela
 cargo run -- lex fixtures/lexer/imports/root.wrela
 ./scripts/plan-review-smoke-test.sh    # verify review tooling (no full reviews)
 ```
-
-## Commit messages
-
-Follow existing history: imperative summary, optional `-Codex Automated` or
-similar suffix when agent-authored. Do not commit unless the user asks.
