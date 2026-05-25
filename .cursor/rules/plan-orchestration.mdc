@@ -14,10 +14,31 @@ You are the **orchestrator**. You are accountable for the full plan AC and the q
 
 ## Subagent execution
 
-- **Use subagents heavily** for plan tasks.
-- Give subagents **very explicit instructions**: files, AC, verification commands, locked decisions, and what not to change.
-- **Parallelize** — launch independent subagents concurrently whenever the plan's Parallel Work Map allows it.
+- **Use subagents heavily** for plan tasks — but only for **code and fixture edits**.
+- Give subagents **very explicit instructions**: files, AC, locked decisions, and what not to change.
+- **Parallelize code work** — launch independent subagents concurrently whenever the plan's Parallel Work Map allows it.
 - Read the plan's dependency graph before scheduling work; never parallelize tasks that share mutable files without a merge/re-verify step.
+
+### Subagents must NOT run Rust / Wrela commands
+
+**Subagents write code; the orchestrator verifies.** Running `cargo`, `rustc`, `./scripts/quality-gate.sh`, `cargo run -- …`, or `./scripts/plan-review*.sh` from multiple subagents in parallel can exhaust the machine. Only the **orchestrator** runs build and test commands.
+
+**Forbidden in subagent prompts and subagent sessions:**
+
+- `cargo build`, `cargo check`, `cargo test`, `cargo clippy`, `cargo fmt`, `cargo run`
+- `./scripts/quality-gate.sh` and any `plan-review*.sh` script
+- Any Wrela CLI invocation (`cargo run -- lex`, `parse`, `dump tokens`, etc.)
+
+**Subagent deliverable:** changed files, a short summary of what was implemented, and the **verification commands the orchestrator should run** — not claims that tests passed.
+
+**Orchestrator verification loop (after each subagent returns):**
+
+1. Review the diff against task AC.
+2. Run the task's focused tests, then `./scripts/quality-gate.sh` — **sequentially**, one task at a time.
+3. Fix gaps yourself or send the subagent back with concrete failures; do not treat subagent "tests passed" as done until **you** have run them.
+4. Commit (or have the subagent commit **only after** orchestrator verification passes, if commits stay in subagent scope).
+
+When launching subagents, include explicitly: **"Do not run cargo, quality-gate, or wrela CLI commands. Return your changes and list verification commands for the orchestrator."**
 
 ## Production quality (non-negotiable)
 
@@ -29,9 +50,26 @@ You are the **orchestrator**. You are accountable for the full plan AC and the q
 
 ## Completion gate
 
-- **Do not return until the full plan is complete.**
-- All tasks done, quality gate passing, review gate passing (Phase A + Phase B), cleanup and merge per workflow.
+- **Do not return to the user until the full plan is complete.** Partial progress is not done.
+- **Do not stop after implementation commits.** Implementation is only half the job.
+- All tasks done → quality gate passing → **Phase A APPROVED on disk** → **Phase B APPROVED (Claude and Codex)** → Phase C cleanup → **merge to `main`** → remove worktree.
+- If Phase A or Phase B rejects, **loop autonomously**: fix → quality gate → re-run Phase A → re-run Phase B — until both pass. Never ask the user to re-run reviews or merge.
 - If a subagent fails or skips AC, you fix it — do not report partial progress as done.
+
+## Review gate (orchestrator-owned)
+
+The orchestrator runs every review script and verification command. Subagents never run `plan-review*.sh`.
+
+```text
+QUALITY_GATE_STRICT_CLEAN=1 ./scripts/quality-gate.sh
+./scripts/plan-review-save-verification.sh docs/implementation/plans/<plan>.md <worktree>
+# Phase A: write *-review-self-thermonuclear.md with ## Verdict: APPROVED
+./scripts/plan-review-check-phase-a.sh <worktree> docs/implementation/plans/<plan>.md
+./scripts/plan-review.sh docs/implementation/plans/<plan>.md <worktree> <base-sha>
+# Phase C: plan-review-cleanup.sh → merge feat branch to main → remove worktree
+```
+
+**Forbidden:** returning after Task N commits without completing Phase A + Phase B + merge; stopping mid-review-loop to ask the user what to do next.
 
 ## Accountability
 
