@@ -140,6 +140,85 @@ impl<'a> Parser<'a> {
         self.finish_node();
     }
 
+    pub(crate) fn parse_block(&mut self) {
+        self.start_node(SyntaxKind::Block);
+        self.expect_punct(Punct::OpenBrace, "expected '{'");
+        while self.peek().kind() != TokenKind::Punct(Punct::CloseBrace)
+            && self.peek().kind() != TokenKind::Eof
+        {
+            self.parse_stmt();
+        }
+        self.expect_close_punct(Punct::CloseBrace, "expected '}'");
+        self.finish_node();
+    }
+
+    pub(crate) fn parse_stmt(&mut self) {
+        match self.peek().kind() {
+            TokenKind::Keyword(Keyword::Let) => self.parse_let_stmt(),
+            TokenKind::Keyword(Keyword::Return) => self.parse_return_stmt(),
+            _ => self.parse_expr_stmt(),
+        }
+    }
+
+    fn parse_let_stmt(&mut self) {
+        self.start_node(SyntaxKind::LetStmt);
+        self.bump();
+        self.expect_identifier();
+        let has_type = if self.eat_punct(Punct::Colon) {
+            self.parse_type_ref();
+            true
+        } else {
+            false
+        };
+        let has_initializer = if self.eat_punct(Punct::Eq) {
+            self.parse_expr();
+            true
+        } else {
+            false
+        };
+        if !has_type && !has_initializer {
+            self.error_at_current(
+                SyntaxErrorKind::ExpectedToken,
+                "expected type annotation or initializer in let statement",
+            );
+        }
+        self.eat_punct(Punct::Semicolon);
+        self.finish_node();
+    }
+
+    fn parse_return_stmt(&mut self) {
+        self.start_node(SyntaxKind::ReturnStmt);
+        self.bump();
+        if !self.at_statement_boundary() {
+            self.parse_expr();
+        }
+        self.eat_punct(Punct::Semicolon);
+        self.finish_node();
+    }
+
+    fn parse_expr_stmt(&mut self) {
+        self.start_node(SyntaxKind::ExprStmt);
+        self.parse_expr();
+        self.eat_punct(Punct::Semicolon);
+        self.finish_node();
+    }
+
+    pub(crate) fn at_statement_boundary(&self) -> bool {
+        matches!(
+            self.peek().kind(),
+            TokenKind::Eof
+                | TokenKind::Punct(Punct::CloseBrace)
+                | TokenKind::Keyword(Keyword::Let)
+                | TokenKind::Keyword(Keyword::Return)
+                | TokenKind::Keyword(Keyword::Match)
+                | TokenKind::Keyword(Keyword::Repeat)
+                | TokenKind::Keyword(Keyword::For)
+                | TokenKind::Keyword(Keyword::Drain)
+                | TokenKind::Keyword(Keyword::Loop)
+                | TokenKind::Keyword(Keyword::Assert)
+        )
+    }
+
     pub(crate) fn peek(&self) -> Token {
         self.tokens[self.token_index]
     }
@@ -312,11 +391,69 @@ impl<'a> Parser<'a> {
 }
 
 #[cfg(test)]
+impl<'a> Parser<'a> {
+    pub(crate) fn parse_block_for_test(mut self) -> ParsedSyntax {
+        self.start_node(SyntaxKind::Module);
+        self.parse_block();
+        while !self.at(TokenKind::Eof) {
+            self.bump();
+        }
+        self.bump();
+        self.finish_node();
+        let tree = self.builder.finish();
+        ParsedSyntax::new(self.lexed.file_id(), tree, self.diagnostics)
+    }
+}
+
+#[cfg(test)]
+fn tree_contains(tree: &super::cst::SyntaxTree, kind: SyntaxKind) -> bool {
+    fn walk(
+        tree: &super::cst::SyntaxTree,
+        node: super::cst::SyntaxNodeId,
+        kind: SyntaxKind,
+    ) -> bool {
+        tree.node(node).kind() == kind
+            || tree.elements(tree.node(node).children()).iter().any(|element| {
+                matches!(*element, super::cst::SyntaxElement::Node(child) if walk(tree, child, kind))
+            })
+    }
+    walk(tree, tree.root(), kind)
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
+    use crate::diagnostic::has_errors;
     use crate::lexer::lex_file;
     use crate::source::{FileId, SourceFile};
     use std::path::PathBuf;
+
+    fn parse_block_text(text: &str) -> ParsedSyntax {
+        let source = SourceFile::new(
+            FileId::new(0),
+            PathBuf::from("block.wrela"),
+            text.to_string(),
+        );
+        let lexed = lex_file(&source);
+        Parser::new(&lexed, &source).parse_block_for_test()
+    }
+
+    #[test]
+    fn parses_basic_block_statements() {
+        let parsed = parse_block_text("{ let result = worker.run(input = 1) return result }");
+
+        assert!(!has_errors(parsed.diagnostics()));
+        assert!(tree_contains(parsed.tree(), SyntaxKind::LetStmt));
+        assert!(tree_contains(parsed.tree(), SyntaxKind::ReturnStmt));
+    }
+
+    #[test]
+    fn let_requires_type_or_initializer() {
+        let parsed = parse_block_text("{ let dangling }");
+        assert!(parsed.diagnostics().iter().any(|diagnostic| {
+            diagnostic.message() == "expected type annotation or initializer in let statement"
+        }));
+    }
 
     #[test]
     fn parse_file_reconstructs_source_with_attached_trivia_and_indentation() {
