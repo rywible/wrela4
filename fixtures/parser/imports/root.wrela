@@ -1,0 +1,2 @@
+use { Console } from app.console
+module app.root

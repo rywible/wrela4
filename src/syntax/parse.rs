@@ -47,7 +47,88 @@ impl<'a> Parser<'a> {
     }
 
     pub(crate) fn parse_item(&mut self) {
-        self.parse_error_item();
+        match self.peek().kind() {
+            TokenKind::Keyword(Keyword::Module) => self.parse_module_decl(),
+            TokenKind::Keyword(Keyword::Use) => self.parse_use_decl(),
+            _ => self.parse_error_item(),
+        }
+    }
+
+    fn parse_module_decl(&mut self) {
+        self.start_node(SyntaxKind::ModuleDecl);
+        self.bump();
+        self.parse_module_path();
+        self.finish_node();
+    }
+
+    fn parse_use_decl(&mut self) {
+        self.start_node(SyntaxKind::UseDecl);
+        self.bump();
+        if self.eat_punct(Punct::OpenBrace) {
+            self.start_node(SyntaxKind::UseBinderList);
+            if self.peek().kind() != TokenKind::Punct(Punct::CloseBrace) {
+                self.parse_use_binder();
+                while self.eat_punct(Punct::Comma) {
+                    if self.peek().kind() == TokenKind::Punct(Punct::CloseBrace) {
+                        break;
+                    }
+                    self.parse_use_binder();
+                }
+            }
+            self.finish_node();
+            self.expect_close_punct(Punct::CloseBrace, "expected '}'");
+        } else {
+            let span = self.peek().span();
+            self.diagnostic(span, "expected import binder list");
+            self.builder
+                .error(SyntaxErrorKind::ExpectedImportBinderList, span);
+        }
+        if self.eat_keyword(Keyword::From) {
+            self.parse_module_path_after_from();
+        } else {
+            let span = self.peek().span();
+            self.diagnostic(span, "expected from in use import");
+            self.builder.error(SyntaxErrorKind::ExpectedFrom, span);
+        }
+        self.finish_node();
+    }
+
+    fn parse_use_binder(&mut self) {
+        self.start_node(SyntaxKind::UseBinder);
+        if self.peek().kind() == TokenKind::Punct(Punct::Star) {
+            let span = self.peek().span();
+            self.diagnostic(span, "wildcard imports are not supported in v1");
+            self.builder
+                .error(SyntaxErrorKind::InvalidImportBinder, span);
+            self.bump();
+        } else if self.expect_identifier() && self.eat_keyword(Keyword::As) {
+            let span = self.peek().span();
+            self.diagnostic(span, "import aliases are not supported in v1");
+            self.builder
+                .error(SyntaxErrorKind::InvalidImportBinder, span);
+            self.expect_identifier();
+        }
+        self.finish_node();
+    }
+
+    fn parse_module_path_after_from(&mut self) {
+        if self.peek().kind() != TokenKind::Identifier {
+            let span = self.peek().span();
+            self.diagnostic(span, "expected module path after from");
+            self.builder
+                .error(SyntaxErrorKind::ExpectedModulePath, span);
+            return;
+        }
+        self.parse_module_path();
+    }
+
+    fn parse_module_path(&mut self) {
+        self.start_node(SyntaxKind::ModulePath);
+        self.expect_identifier();
+        while self.eat_punct(Punct::Dot) {
+            self.expect_identifier();
+        }
+        self.finish_node();
     }
 
     pub(crate) fn parse_error_item(&mut self) {
