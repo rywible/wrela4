@@ -35,7 +35,7 @@ Subagents may run focused Rust/Wrela commands needed for their task, but every c
 
 - focused `cargo test <single-filter>` or `cargo test --test <target> <single-filter>`
 - focused `cargo check` when the task needs compile feedback
-- focused Wrela CLI invocations against task fixtures
+- focused Wrela CLI on task fixtures (`cargo run -- check|lex|parse …`); for check AC prefer `cargo test --test check <filter>` when a test exists
 
 **Forbidden in subagent prompts and subagent sessions:**
 

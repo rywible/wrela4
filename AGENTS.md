@@ -14,9 +14,10 @@ Wrela is an AArch64-only systems language. This repository contains the **Rust
 command center**: a zero-dependency compiler nucleus and CLI in a single Cargo
 package named `wrela`.
 
-**Current implementation status:** lexer, import-summary parsing, root-driven
-discovery, and basic CLI are complete (see implementation README). Parser and
-later phases are not started.
+**Current implementation status:** lexer, discovery, CST parser, and **`wrela check`**
+(semantic checking for the parser-supported subset) are complete — see
+[`docs/implementation/README.md`](docs/implementation/README.md). `wrela build`
+and `wrela test` are not started.
 
 ## Source layout
 
@@ -28,10 +29,13 @@ src/
   diagnostic.rs    Severity, Span, Diagnostic, rendering
   source.rs        SourceFile, Span, SourceMap, FileId
   discover.rs      root-driven import graph expansion + parallel lex batches
+  check/           read-only semantic checker (`wrela check` pipeline)
   lexer/           lossless tokenizer (tokens + trivia, byte spans)
-  syntax/          minimal parsers (imports.rs today; full parser later)
+  syntax/          CST parser and import-summary scanner
 tests/lexer.rs     integration tests via public crate API only
-fixtures/lexer/    .wrela fixtures for tests and manual CLI runs
+tests/check.rs     `wrela check` CLI and checker integration tests
+fixtures/lexer/    .wrela fixtures for lexer tests and manual CLI runs
+fixtures/check/    .wrela fixtures for check diagnostics and smoke tests
 docs/
   design-principles.md
   design/          language spec, ADRs, architecture, supported syntax subset
@@ -100,12 +104,28 @@ New plans: copy [`docs/implementation/plans/plan-template.md`](docs/implementati
 
 New architecture decisions: copy [`docs/design/decision-template.md`](docs/design/decision-template.md).
 
+## `wrela check`
+
+Read-only semantic validation (summaries → resolve → types → bodies → ownership → effects → layout). Not a formatter.
+
+**CLI:** `cargo run -- check [--json|--human] <root.wrela>` — JSON default (`wrela.check.v1`); `--human` for source diagnostics. Exit `0`/`1`/`2` (ok / errors / bad usage). Flags before path; unknown `--*` rejected.
+
+**Use when:**
+
+- Semantic AC or fixture behavior → `cargo run -- check …` or `cargo test --test check <filter>`
+- Debug output → `--human`; machine output → default JSON
+- Lex/parse only → `wrela lex` / `wrela parse` (not check)
+- Repo handoff → `./scripts/quality-gate.sh` (orchestrator only; subagents: focused check commands with timeout)
+
+**API:** `wrela::check::check_root(path)` → `CheckResult`; render via `diagnostic::render_diagnostics`. Codes: [`docs/design/diagnostic-codes.md`](docs/design/diagnostic-codes.md). Fixtures: [`fixtures/check/`](fixtures/check/).
+
 ## Useful commands
 
 ```bash
-cargo run -- help
-cargo run -- version
-cargo run -- dump tokens fixtures/lexer/basic.wrela
+cargo run -- check <root.wrela>                              # JSON
+cargo run -- check --human fixtures/check/diagnostics/unknown-type.wrela
+cargo test --test check
 cargo run -- lex fixtures/lexer/imports/root.wrela
-./scripts/plan-review-smoke-test.sh    # verify review tooling (no full reviews)
+cargo run -- parse fixtures/parser/declarations-top.wrela
+./scripts/quality-gate.sh
 ```

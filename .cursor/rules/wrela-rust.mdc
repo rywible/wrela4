@@ -40,6 +40,7 @@ Read [`AGENTS.md`](../../AGENTS.md) and [`docs/design/locked-decisions.md`](../.
 - Unit tests: colocated in `#[cfg(test)] mod tests` in the same file.
 - Integration tests: `tests/*.rs` using the public crate API only (`use wrela::...`).
 - Fixtures live under `fixtures/`; prefer real `.wrela` files over inline strings for integration coverage.
+- Check behavior: `tests/check.rs`, `fixtures/check/`; wire phases in `check::check_root` (return `Diagnostic`, never print)
 
 ## Quality gate
 
