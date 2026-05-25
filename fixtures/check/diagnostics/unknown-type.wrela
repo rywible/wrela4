@@ -1,0 +1,5 @@
+module root
+pub unique class Console {}
+pub data Port {
+  value: Consol
+}

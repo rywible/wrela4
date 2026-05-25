@@ -1,4 +1,4 @@
-use crate::diagnostic::Diagnostic;
+use crate::diagnostic::{Diagnostic, DiagnosticCode, Severity};
 use crate::lexer::{Keyword, LexedFile, Punct, Token, TokenKind};
 use crate::source::{SourceFile, Span};
 
@@ -81,7 +81,11 @@ pub fn parse_import_summary(lexed: &LexedFile, source: &SourceFile) -> ImportSum
 
         loop {
             if index >= tokens.len() {
-                diagnostics.push(Diagnostic::error(use_span, "expected from in use import"));
+                diagnostics.push(parse_import_diagnostic(
+                    DiagnosticCode::ParseExpectedFrom,
+                    use_span,
+                    "expected from in use import",
+                ));
                 break;
             }
 
@@ -95,19 +99,27 @@ pub fn parse_import_summary(lexed: &LexedFile, source: &SourceFile) -> ImportSum
                             imports.push(ImportEdge::new(module, span));
                         }
                         Err(diagnostic) => {
-                            diagnostics.push(diagnostic);
+                            diagnostics.push(*diagnostic);
                             index = skip_to_next_use(tokens, index);
                         }
                     }
                     break;
                 }
                 TokenKind::Keyword(Keyword::Use) => {
-                    diagnostics.push(Diagnostic::error(use_span, "expected from in use import"));
+                    diagnostics.push(parse_import_diagnostic(
+                        DiagnosticCode::ParseExpectedFrom,
+                        use_span,
+                        "expected from in use import",
+                    ));
                     use_span = tokens[index].span();
                     index += 1;
                 }
                 TokenKind::Eof => {
-                    diagnostics.push(Diagnostic::error(use_span, "expected from in use import"));
+                    diagnostics.push(parse_import_diagnostic(
+                        DiagnosticCode::ParseExpectedFrom,
+                        use_span,
+                        "expected from in use import",
+                    ));
                     index = tokens.len();
                     break;
                 }
@@ -119,17 +131,24 @@ pub fn parse_import_summary(lexed: &LexedFile, source: &SourceFile) -> ImportSum
     ImportSummary::new(imports, diagnostics)
 }
 
+fn parse_import_diagnostic(code: DiagnosticCode, span: Span, message: &'static str) -> Diagnostic {
+    Diagnostic::builder(Severity::Error, code, message)
+        .primary(span, message)
+        .finish()
+}
+
 fn parse_module_path(
     tokens: &[Token],
     source: &SourceFile,
     from_span: Span,
     index: &mut usize,
-) -> Result<(ModulePath, Span), Diagnostic> {
+) -> Result<(ModulePath, Span), Box<Diagnostic>> {
     if *index >= tokens.len() || tokens[*index].kind() != TokenKind::Identifier {
-        return Err(Diagnostic::error(
+        return Err(Box::new(parse_import_diagnostic(
+            DiagnosticCode::ParseExpectedModulePath,
             from_span,
             "expected module path after from",
-        ));
+        )));
     }
 
     let first = tokens[*index];
@@ -145,10 +164,11 @@ fn parse_module_path(
 
         *index += 1;
         if *index >= tokens.len() || tokens[*index].kind() != TokenKind::Identifier {
-            return Err(Diagnostic::error(
+            return Err(Box::new(parse_import_diagnostic(
+                DiagnosticCode::ParseExpectedIdentifier,
                 from_span,
                 "expected identifier after dot in module path",
-            ));
+            )));
         }
 
         let segment = tokens[*index];
@@ -172,15 +192,16 @@ fn parse_module_path(
             }
         }
         let span = Span::new(first.span().file_id(), path_start, path_end);
-        return Err(Diagnostic::error(
+        return Err(Box::new(parse_import_diagnostic(
+            DiagnosticCode::ParseExpectedModulePath,
             span,
             "invalid path separator in module path",
-        ));
+        )));
     }
 
     let span = Span::new(first.span().file_id(), path_start, path_end);
     if let Some(diagnostic) = validate_module_segments(&segments, span) {
-        return Err(diagnostic);
+        return Err(Box::new(diagnostic));
     }
     Ok((ModulePath::new(segments), span))
 }
@@ -188,7 +209,8 @@ fn parse_module_path(
 fn validate_module_segments(segments: &[String], span: Span) -> Option<Diagnostic> {
     for segment in segments {
         if segment == "wrela" {
-            return Some(Diagnostic::error(
+            return Some(parse_import_diagnostic(
+                DiagnosticCode::ParseExpectedModulePath,
                 span,
                 "module path must not include file extension",
             ));
@@ -263,6 +285,7 @@ mod tests {
             summary.diagnostics()[0].message(),
             "expected from in use import"
         );
+        assert_eq!(summary.diagnostics()[0].code_string(), Some("W-PARSE-FROM"));
     }
 
     #[test]

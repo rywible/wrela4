@@ -32,6 +32,7 @@ where
             let _ = writeln!(out, "wrela commands: help, version");
             let _ = writeln!(out, "wrela lex <root.wrela>");
             let _ = writeln!(out, "wrela parse <root.wrela>");
+            let _ = writeln!(out, "wrela check [--json|--human] <root.wrela>");
             let _ = writeln!(out, "wrela dump tokens <file.wrela>");
             0
         }
@@ -39,6 +40,7 @@ where
             let _ = writeln!(out, "wrela commands: help, version");
             let _ = writeln!(out, "wrela lex <root.wrela>");
             let _ = writeln!(out, "wrela parse <root.wrela>");
+            let _ = writeln!(out, "wrela check [--json|--human] <root.wrela>");
             let _ = writeln!(out, "wrela dump tokens <file.wrela>");
             0
         }
@@ -98,6 +100,7 @@ where
                 2
             }
         },
+        Some("check") => run_check_command(&collected, out, err),
         Some(other) => {
             let _ = writeln!(err, "unknown command: {other}");
             2
@@ -224,6 +227,63 @@ where
     } else {
         0
     }
+}
+
+fn run_check_command<W, E>(args: &[String], out: &mut W, err: &mut E) -> i32
+where
+    W: std::io::Write,
+    E: std::io::Write,
+{
+    let mut format = crate::check::CheckFormat::Json;
+    let mut saw_format_flag = false;
+    let mut root: Option<&str> = None;
+
+    for arg in &args[2..] {
+        match arg.as_str() {
+            "--json" if !saw_format_flag && root.is_none() => {
+                format = crate::check::CheckFormat::Json;
+                saw_format_flag = true;
+            }
+            "--human" if !saw_format_flag && root.is_none() => {
+                format = crate::check::CheckFormat::Human;
+                saw_format_flag = true;
+            }
+            "--json" | "--human" => {
+                let _ = writeln!(err, "malformed command");
+                return 2;
+            }
+            value if value.starts_with("--") => {
+                let _ = writeln!(err, "malformed command");
+                return 2;
+            }
+            value if root.is_none() => root = Some(value),
+            _ => {
+                let _ = writeln!(err, "malformed command");
+                return 2;
+            }
+        }
+    }
+
+    let Some(root) = root else {
+        let _ = writeln!(err, "missing root file path");
+        return 2;
+    };
+
+    let result = crate::check::check_root(root);
+    match format {
+        crate::check::CheckFormat::Json => {
+            let _ = writeln!(out, "{}", crate::check::json::render_check_json(&result));
+        }
+        crate::check::CheckFormat::Human => {
+            let _ = write!(
+                out,
+                "{}",
+                crate::diagnostic::render_diagnostics(result.diagnostics(), result.source_map())
+            );
+        }
+    }
+
+    if result.ok() { 0 } else { 1 }
 }
 
 fn print_lexed_items<W>(out: &mut W, lexed: &LexedFile)

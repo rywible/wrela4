@@ -295,7 +295,11 @@ impl<'a> Parser<'a> {
             self.expect_close_punct(Punct::CloseBrace, "expected '}'");
         } else {
             let span = self.peek().span();
-            self.diagnostic(span, "expected import binder list");
+            self.diagnostic(
+                SyntaxErrorKind::ExpectedImportBinderList,
+                span,
+                "expected import binder list",
+            );
             self.builder
                 .error(SyntaxErrorKind::ExpectedImportBinderList, span);
         }
@@ -303,7 +307,11 @@ impl<'a> Parser<'a> {
             self.parse_module_path_after_from();
         } else {
             let span = self.peek().span();
-            self.diagnostic(span, "expected from in use import");
+            self.diagnostic(
+                SyntaxErrorKind::ExpectedFrom,
+                span,
+                "expected from in use import",
+            );
             self.builder.error(SyntaxErrorKind::ExpectedFrom, span);
             if self.peek().kind() == TokenKind::Identifier {
                 self.parse_module_path();
@@ -316,13 +324,21 @@ impl<'a> Parser<'a> {
         self.start_node(SyntaxKind::UseBinder);
         if self.peek().kind() == TokenKind::Punct(Punct::Star) {
             let span = self.peek().span();
-            self.diagnostic(span, "wildcard imports are not supported in v1");
+            self.diagnostic(
+                SyntaxErrorKind::InvalidImportBinder,
+                span,
+                "wildcard imports are not supported in v1",
+            );
             self.builder
                 .error(SyntaxErrorKind::InvalidImportBinder, span);
             self.bump();
         } else if self.expect_identifier() && self.eat_keyword(Keyword::As) {
             let span = self.peek().span();
-            self.diagnostic(span, "import aliases are not supported in v1");
+            self.diagnostic(
+                SyntaxErrorKind::InvalidImportBinder,
+                span,
+                "import aliases are not supported in v1",
+            );
             self.builder
                 .error(SyntaxErrorKind::InvalidImportBinder, span);
             self.expect_identifier();
@@ -333,7 +349,11 @@ impl<'a> Parser<'a> {
     fn parse_module_path_after_from(&mut self) {
         if self.peek().kind() != TokenKind::Identifier {
             let span = self.peek().span();
-            self.diagnostic(span, "expected module path after from");
+            self.diagnostic(
+                SyntaxErrorKind::ExpectedModulePath,
+                span,
+                "expected module path after from",
+            );
             self.builder
                 .error(SyntaxErrorKind::ExpectedModulePath, span);
             return;

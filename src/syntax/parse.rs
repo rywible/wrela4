@@ -1,4 +1,4 @@
-use crate::diagnostic::Diagnostic;
+use crate::diagnostic::{Diagnostic, DiagnosticCode, Severity};
 use crate::lexer::{Keyword, LexedFile, Punct, Token, TokenKind, TriviaKind};
 use crate::source::{SourceFile, SourceMap, Span};
 
@@ -362,12 +362,17 @@ impl<'a> Parser<'a> {
 
     pub(crate) fn error_at_current(&mut self, kind: SyntaxErrorKind, message: &'static str) {
         let span = self.peek().span();
-        self.diagnostic(span, message);
+        self.diagnostic(kind, span, message);
         self.builder.error(kind, span);
     }
 
-    pub(crate) fn diagnostic(&mut self, span: Span, message: &'static str) {
-        self.diagnostics.push(Diagnostic::error(span, message));
+    pub(crate) fn diagnostic(&mut self, kind: SyntaxErrorKind, span: Span, message: &'static str) {
+        let code = DiagnosticCode::from_syntax_error(kind);
+        self.diagnostics.push(
+            Diagnostic::builder(Severity::Error, code, message)
+                .primary(span, message)
+                .finish(),
+        );
     }
 
     pub(crate) fn token_text(&self, token: Token) -> &str {

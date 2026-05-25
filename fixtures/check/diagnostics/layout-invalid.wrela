@@ -1,0 +1,5 @@
+module root
+
+pub layout C data Packet {
+  name: String
+}

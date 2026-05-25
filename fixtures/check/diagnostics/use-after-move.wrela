@@ -1,0 +1,12 @@
+module root
+
+pub data Bytes {
+  value: U32
+}
+
+pub class C {
+  fn m(own bytes: Bytes) -> Bytes {
+    let saved = bytes
+    return bytes
+  }
+}

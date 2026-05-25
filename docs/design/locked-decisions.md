@@ -58,7 +58,17 @@ Rules agents must not violate without an explicit new decision doc in
 | Imports | CST parser accepts explicit import binders only; aliases and wildcards are parser errors |
 | Recovery | Malformed source produces diagnostics and recovery nodes, not parser panics |
 | Parser parallelism | `parse_files_parallel` uses chunked scoped workers and deterministic `FileId` sorting |
-| CLI surface | `wrela parse <root.wrela>` inspects parse output; `wrela check` remains out of scope |
+| CLI surface | `wrela parse <root.wrela>` inspects parse output; `wrela check` validates the parser-supported semantic subset |
+
+## Check (implemented)
+
+| Decision | Detail |
+|----------|--------|
+| Read-only | `wrela check` is read-only; formatting is a separate future command |
+| Default output | `wrela check` emits JSON by default; human diagnostics require `--human` |
+| Diagnostic codes | Stable and owned by `docs/design/diagnostic-codes.md` |
+| Suggested fixes | Must include applicability and source-hash preconditions |
+| MIR lowering | Must consume semantic artifacts, not canonical source text |
 
 ## CLI (implemented)
 
@@ -68,6 +78,7 @@ Rules agents must not violate without an explicit new decision doc in
 | `dump tokens <file>` | Lex one file; exit 1 on errors |
 | `lex <root.wrela>` | Discover + lex graph; exit 1 on errors |
 | `parse <root.wrela>` | Discover + parse graph; exit 1 on errors |
+| `check <root.wrela>` | Discover + parse + semantic check; JSON by default; `--human` for rendered diagnostics; exit 1 on errors |
 | Unknown command | Exit 2 |
 | Malformed arity | Exit 2 (no surplus arguments) |
 

@@ -52,7 +52,7 @@ impl Span {
     }
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct SourceFile {
     id: FileId,
     path: PathBuf,
@@ -90,9 +90,71 @@ impl SourceFile {
     pub fn span(&self) -> Span {
         Span::new(self.id, 0, self.text.len() as u32)
     }
+
+    pub fn line_col(&self, offset: u32) -> SourceLocation {
+        let line_index = match self.line_starts.binary_search(&offset) {
+            Ok(index) => index,
+            Err(index) => index.saturating_sub(1),
+        };
+        let line_start = self.line_starts[line_index];
+        SourceLocation::new(line_index as u32 + 1, offset.saturating_sub(line_start) + 1)
+    }
+
+    pub fn span_text(&self, span: Span) -> Option<&str> {
+        if span.file_id() != self.id {
+            return None;
+        }
+        self.text.get(span.start() as usize..span.end() as usize)
+    }
+
+    pub fn source_hash(&self) -> SourceHash {
+        SourceHash::from_text(&self.text)
+    }
 }
 
-#[derive(Debug, Default)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct SourceLocation {
+    line: u32,
+    column: u32,
+}
+
+impl SourceLocation {
+    pub const fn new(line: u32, column: u32) -> Self {
+        Self { line, column }
+    }
+
+    pub const fn line(self) -> u32 {
+        self.line
+    }
+
+    pub const fn column(self) -> u32 {
+        self.column
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct SourceHash(u64);
+
+impl SourceHash {
+    pub fn from_text(text: &str) -> Self {
+        let mut hash = 0xcbf29ce484222325u64;
+        for byte in text.as_bytes() {
+            hash ^= u64::from(*byte);
+            hash = hash.wrapping_mul(0x100000001b3);
+        }
+        Self(hash)
+    }
+
+    pub const fn raw(self) -> u64 {
+        self.0
+    }
+
+    pub fn to_hex(self) -> String {
+        format!("{:016x}", self.0)
+    }
+}
+
+#[derive(Clone, Debug, Default)]
 pub struct SourceMap {
     files: Vec<SourceFile>,
 }
@@ -183,5 +245,34 @@ mod tests {
         assert_eq!(second, FileId::new(1));
         assert_eq!(map.get(first).unwrap().text(), "a");
         assert_eq!(map.get(second).unwrap().text(), "b");
+    }
+
+    #[test]
+    fn reports_one_based_line_and_column() {
+        let file = SourceFile::new(
+            FileId::new(0),
+            PathBuf::from("root.wrela"),
+            "first\nsecond\n".to_string(),
+        );
+
+        assert_eq!(file.line_col(0), SourceLocation::new(1, 1));
+        assert_eq!(file.line_col(6), SourceLocation::new(2, 1));
+        assert_eq!(file.line_col(12), SourceLocation::new(2, 7));
+    }
+
+    #[test]
+    fn returns_span_text_and_stable_hash() {
+        let file = SourceFile::new(
+            FileId::new(3),
+            PathBuf::from("root.wrela"),
+            "module app\n".to_string(),
+        );
+        let span = Span::new(FileId::new(3), 0, 6);
+
+        assert_eq!(file.span_text(span), Some("module"));
+        assert_eq!(file.source_hash(), SourceHash::from_text("module app\n"));
+        let hash = file.source_hash().to_hex();
+        assert_eq!(hash.len(), 16);
+        assert!(hash.chars().all(|ch| ch.is_ascii_hexdigit()));
     }
 }

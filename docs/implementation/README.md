@@ -8,7 +8,8 @@ Plans, review workflow, and delivery status for the Wrela command center.
 |------|--------|-------|
 | [Lexer and initial Rust setup](plans/2026-05-22-lexer-and-initial-rust-setup.md) | **Complete** | Merged to `main` |
 | [CST parser](plans/2026-05-24-cst-parser.md) | **Complete** | Lossless CST parser + `wrela parse` |
-| `wrela check` / `wrela build` / `wrela test` | Not started | Listed in ADR 0001; not implemented in CLI yet |
+| [Check and diagnostics](plans/2026-05-25-check-01-diagnostics-json-cli.md) | **Complete** | `wrela check` for parser-supported semantic subset (resolve, types, bodies, ownership, effects, layout) |
+| `wrela build` / `wrela test` | Not started | Listed in ADR 0001; not implemented in CLI yet |
 
 Update this table when starting or finishing a plan.
 
