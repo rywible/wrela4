@@ -48,10 +48,278 @@ impl<'a> Parser<'a> {
 
     pub(crate) fn parse_item(&mut self) {
         match self.peek().kind() {
+            TokenKind::Keyword(Keyword::Pub) => self.parse_pub_item(),
             TokenKind::Keyword(Keyword::Module) => self.parse_module_decl(),
             TokenKind::Keyword(Keyword::Use) => self.parse_use_decl(),
+            TokenKind::Keyword(Keyword::Data) => self.parse_data_decl(),
+            TokenKind::Keyword(Keyword::Layout) => self.parse_layout_data_decl(),
+            TokenKind::Keyword(Keyword::Class) => self.parse_class_decl(),
+            TokenKind::Keyword(Keyword::Unique) => self.parse_unique_class_decl(),
+            TokenKind::Keyword(Keyword::Interface) => self.parse_interface_decl(),
+            TokenKind::Keyword(Keyword::Error) => self.parse_error_decl(),
+            TokenKind::Keyword(Keyword::Image) => self.parse_image_decl(),
+            TokenKind::Keyword(Keyword::Host) => self.parse_host_image_decl(),
             _ => self.parse_error_item(),
         }
+    }
+
+    fn parse_pub_item(&mut self) {
+        self.start_node(SyntaxKind::PublicItem);
+        self.start_node(SyntaxKind::PubModifier);
+        self.bump();
+        self.finish_node();
+        self.parse_item();
+        self.finish_node();
+    }
+
+    fn parse_data_decl(&mut self) {
+        self.start_node(SyntaxKind::DataDecl);
+        self.bump();
+        self.expect_identifier();
+        self.parse_generic_param_list();
+        self.parse_field_block();
+        self.finish_node();
+    }
+
+    fn parse_layout_data_decl(&mut self) {
+        self.start_node(SyntaxKind::LayoutDataDecl);
+        self.bump(); // layout
+        self.expect_identifier(); // layout ABI, such as C
+        self.expect_keyword(Keyword::Data, "expected data after layout");
+        self.expect_identifier();
+        self.parse_field_block();
+        self.finish_node();
+    }
+
+    fn parse_interface_decl(&mut self) {
+        self.start_node(SyntaxKind::InterfaceDecl);
+        self.bump();
+        self.expect_identifier();
+        self.parse_generic_param_list();
+        self.expect_punct(Punct::OpenBrace, "expected '{'");
+        while self.peek().kind() != TokenKind::Punct(Punct::CloseBrace)
+            && self.peek().kind() != TokenKind::Eof
+        {
+            self.parse_method_signature_decl();
+        }
+        self.expect_close_punct(Punct::CloseBrace, "expected '}'");
+        self.finish_node();
+    }
+
+    fn parse_error_decl(&mut self) {
+        self.start_node(SyntaxKind::ErrorDecl);
+        self.bump();
+        self.expect_identifier();
+        self.parse_field_block();
+        self.finish_node();
+    }
+
+    fn parse_unique_class_decl(&mut self) {
+        self.start_node(SyntaxKind::UniqueClassDecl);
+        self.bump();
+        self.expect_keyword(Keyword::Class, "expected class after unique");
+        self.parse_class_tail();
+        self.finish_node();
+    }
+
+    fn parse_class_decl(&mut self) {
+        self.start_node(SyntaxKind::ClassDecl);
+        self.bump();
+        self.parse_class_tail();
+        self.finish_node();
+    }
+
+    fn parse_class_tail(&mut self) {
+        self.expect_identifier();
+        self.parse_generic_param_list();
+        self.parse_implements_clause();
+        self.expect_punct(Punct::OpenBrace, "expected '{'");
+        while self.peek().kind() != TokenKind::Punct(Punct::CloseBrace)
+            && self.peek().kind() != TokenKind::Eof
+        {
+            self.parse_member();
+        }
+        self.expect_close_punct(Punct::CloseBrace, "expected '}'");
+    }
+
+    fn parse_implements_clause(&mut self) {
+        if self.eat_keyword(Keyword::Implements) {
+            self.start_node(SyntaxKind::ImplementsClause);
+            self.parse_type_ref();
+            while self.eat_punct(Punct::Comma) {
+                self.parse_type_ref();
+            }
+            self.finish_node();
+        }
+    }
+
+    fn parse_field_block(&mut self) {
+        self.expect_punct(Punct::OpenBrace, "expected '{'");
+        while self.peek().kind() != TokenKind::Punct(Punct::CloseBrace)
+            && self.peek().kind() != TokenKind::Eof
+        {
+            self.parse_field_decl();
+        }
+        self.expect_close_punct(Punct::CloseBrace, "expected '}'");
+    }
+
+    fn parse_field_decl(&mut self) {
+        self.start_node(SyntaxKind::FieldDecl);
+        self.expect_binding_name();
+        self.expect_punct(Punct::Colon, "expected ':'");
+        self.parse_type_ref();
+        self.finish_node();
+    }
+
+    fn parse_member(&mut self) {
+        match self.peek().kind() {
+            TokenKind::Keyword(Keyword::Constructor) => self.parse_constructor_decl(),
+            TokenKind::Keyword(Keyword::Fn) | TokenKind::Keyword(Keyword::Asm) => {
+                self.parse_method_decl()
+            }
+            TokenKind::Keyword(Keyword::Test) => self.parse_test_decl(),
+            TokenKind::Identifier
+                if self.peek_n(1).kind() == TokenKind::Punct(Punct::Colon) =>
+            {
+                self.parse_field_decl()
+            }
+            _ => self.parse_member_error(),
+        }
+    }
+
+    fn parse_method_decl(&mut self) {
+        self.start_node(SyntaxKind::MethodDecl);
+        self.parse_method_head();
+        self.parse_block();
+        self.finish_node();
+    }
+
+    fn parse_constructor_decl(&mut self) {
+        self.start_node(SyntaxKind::ConstructorDecl);
+        self.bump();
+        self.parse_param_list();
+        if self.eat_punct(Punct::Arrow) {
+            self.parse_return_type();
+        }
+        self.parse_block();
+        self.finish_node();
+    }
+
+    fn parse_test_decl(&mut self) {
+        self.start_node(SyntaxKind::TestDecl);
+        self.bump();
+        if self.peek().kind() == TokenKind::StringLiteral {
+            self.bump();
+        } else {
+            self.expect_identifier();
+        }
+        self.parse_block();
+        self.finish_node();
+    }
+
+    fn parse_phase_decl(&mut self) {
+        self.start_node(SyntaxKind::PhaseDecl);
+        self.bump();
+        self.expect_identifier();
+        self.parse_param_list();
+        self.parse_block();
+        self.finish_node();
+    }
+
+    fn parse_method_signature_decl(&mut self) {
+        self.start_node(SyntaxKind::MethodDecl);
+        self.parse_method_head();
+        self.finish_node();
+    }
+
+    fn parse_method_head(&mut self) {
+        if self.eat_keyword(Keyword::Asm) {
+            self.expect_keyword(Keyword::Fn, "expected item");
+        } else {
+            self.expect_keyword(Keyword::Fn, "expected item");
+        }
+        self.expect_identifier();
+        self.parse_generic_param_list();
+        self.parse_param_list();
+        if self.eat_punct(Punct::Arrow) {
+            self.parse_return_type();
+        }
+    }
+
+    fn parse_return_type(&mut self) {
+        self.start_node(SyntaxKind::ReturnType);
+        self.parse_type_ref();
+        self.finish_node();
+    }
+
+    fn parse_param_list(&mut self) {
+        self.start_node(SyntaxKind::ParamList);
+        self.expect_punct(Punct::OpenParen, "expected '('");
+        while self.peek().kind() != TokenKind::Punct(Punct::CloseParen)
+            && self.peek().kind() != TokenKind::Eof
+        {
+            self.start_node(SyntaxKind::Param);
+            if matches!(
+                self.peek().kind(),
+                TokenKind::Keyword(Keyword::Read)
+                    | TokenKind::Keyword(Keyword::Mut)
+                    | TokenKind::Keyword(Keyword::Own)
+            ) {
+                self.bump();
+            }
+            self.expect_binding_name();
+            if self.eat_punct(Punct::Colon) {
+                self.parse_type_ref();
+            }
+            self.finish_node();
+            if !self.eat_punct(Punct::Comma) {
+                break;
+            }
+        }
+        self.expect_close_punct(Punct::CloseParen, "expected ')'");
+        self.finish_node();
+    }
+
+    fn parse_image_decl(&mut self) {
+        self.start_node(SyntaxKind::ImageDecl);
+        self.bump();
+        self.expect_identifier();
+        self.expect_keyword(Keyword::Target, "expected target in image declaration");
+        self.parse_type_ref();
+        self.parse_image_body();
+        self.finish_node();
+    }
+
+    fn parse_host_image_decl(&mut self) {
+        self.start_node(SyntaxKind::HostImageDecl);
+        self.bump();
+        self.expect_keyword(Keyword::Image, "expected image after host");
+        self.expect_identifier();
+        self.parse_image_body();
+        self.finish_node();
+    }
+
+    fn parse_image_body(&mut self) {
+        self.expect_punct(Punct::OpenBrace, "expected '{'");
+        while self.peek().kind() != TokenKind::Punct(Punct::CloseBrace)
+            && self.peek().kind() != TokenKind::Eof
+        {
+            if self.peek().kind() == TokenKind::Keyword(Keyword::Phase) {
+                self.parse_phase_decl();
+            } else {
+                self.parse_error_item();
+            }
+        }
+        self.expect_close_punct(Punct::CloseBrace, "expected '}'");
+    }
+
+    fn parse_member_error(&mut self) {
+        let span = self.peek().span();
+        self.start_node(SyntaxKind::RecoveryNode);
+        self.diagnostic(span, "unexpected token in class body");
+        self.builder.error(SyntaxErrorKind::UnexpectedToken, span);
+        self.bump();
+        self.finish_node();
     }
 
     fn parse_module_decl(&mut self) {
@@ -146,7 +414,15 @@ impl<'a> Parser<'a> {
         while self.peek().kind() != TokenKind::Punct(Punct::CloseBrace)
             && self.peek().kind() != TokenKind::Eof
         {
+            let index_before = self.token_index;
             self.parse_stmt();
+            if self.token_index == index_before
+                && self.peek().kind() != TokenKind::Punct(Punct::CloseBrace)
+                && self.peek().kind() != TokenKind::Eof
+            {
+                self.error_at_current(SyntaxErrorKind::UnexpectedToken, "unexpected token in statement");
+                self.bump();
+            }
         }
         self.expect_close_punct(Punct::CloseBrace, "expected '}'");
         self.finish_node();
@@ -163,7 +439,7 @@ impl<'a> Parser<'a> {
     fn parse_let_stmt(&mut self) {
         self.start_node(SyntaxKind::LetStmt);
         self.bump();
-        self.expect_identifier();
+        self.expect_binding_name();
         let has_type = if self.eat_punct(Punct::Colon) {
             self.parse_type_ref();
             true
@@ -340,6 +616,20 @@ impl<'a> Parser<'a> {
         } else {
             self.error_at_current(SyntaxErrorKind::ExpectedIdentifier, "expected identifier");
             false
+        }
+    }
+
+    /// Parameter, field, and local names may use lexed keywords (e.g. `host` in `host: Type`).
+    pub(crate) fn expect_binding_name(&mut self) -> bool {
+        match self.peek().kind() {
+            TokenKind::Identifier | TokenKind::Keyword(_) => {
+                self.bump();
+                true
+            }
+            _ => {
+                self.error_at_current(SyntaxErrorKind::ExpectedIdentifier, "expected identifier");
+                false
+            }
         }
     }
 

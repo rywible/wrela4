@@ -1,0 +1,29 @@
+pub data Packet {
+    len: U32
+    payload: Bytes[256]
+}
+
+layout C data WirePacket {
+    tag: U8
+    len: U16
+}
+
+interface Console {
+    fn write(read self, bytes: read Bytes) -> Result
+}
+
+error IoError {
+    code: U32
+}
+
+image Firmware target AArch64 {
+    phase boot(host: unique MacOSHost) {
+        return
+    }
+}
+
+host image HostTests {
+    phase run(host: unique MacOSHost) {
+        return
+    }
+}

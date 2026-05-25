@@ -1,0 +1,27 @@
+class ConsoleTests<C: Console> implements Console {
+    device: Uart
+
+    constructor(port: unique Port) {
+        return
+    }
+
+    fn write(read self, bytes: read Bytes) -> Result {
+        return ok
+    }
+
+    asm fn flush(mut self) -> None {
+        return
+    }
+
+    test "writes bytes" {
+        return
+    }
+}
+
+unique class UartDriver {
+    port: Port
+
+    constructor(port: unique Port) {
+        return
+    }
+}

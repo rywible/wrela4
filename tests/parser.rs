@@ -128,6 +128,44 @@ fn cst_import_path_agrees_with_discovery_import_parser() {
 }
 
 #[test]
+fn parses_top_level_declaration_forms() {
+    let parsed = parse_fixture("declarations-top.wrela");
+
+    assert!(!has_errors(parsed.diagnostics()));
+    for kind in [
+        SyntaxKind::PublicItem,
+        SyntaxKind::DataDecl,
+        SyntaxKind::LayoutDataDecl,
+        SyntaxKind::InterfaceDecl,
+        SyntaxKind::ErrorDecl,
+        SyntaxKind::ImageDecl,
+        SyntaxKind::HostImageDecl,
+        SyntaxKind::PhaseDecl,
+    ] {
+        assert!(tree_contains(parsed.tree(), kind), "missing {kind:?}");
+    }
+}
+
+#[test]
+fn parses_member_declaration_forms() {
+    let parsed = parse_fixture("declarations-members.wrela");
+
+    assert!(!has_errors(parsed.diagnostics()));
+    for kind in [
+        SyntaxKind::ClassDecl,
+        SyntaxKind::UniqueClassDecl,
+        SyntaxKind::ImplementsClause,
+        SyntaxKind::FieldDecl,
+        SyntaxKind::ConstructorDecl,
+        SyntaxKind::MethodDecl,
+        SyntaxKind::TestDecl,
+        SyntaxKind::Block,
+    ] {
+        assert!(tree_contains(parsed.tree(), kind), "missing {kind:?}");
+    }
+}
+
+#[test]
 fn parser_harness_smoke_parses_empty_fixture() {
     let parsed = parse_fixture("parser_harness_smoke.wrela");
     let inline = parse_text("");
