@@ -13,7 +13,6 @@ pub(crate) enum BindingPower {
     Add = 4,
     Mul = 5,
     Prefix = 6,
-    Postfix = 7,
 }
 
 impl<'a> Parser<'a> {
@@ -105,7 +104,7 @@ impl<'a> Parser<'a> {
     fn parse_reduce_expr(&mut self) {
         self.start_node(SyntaxKind::ReduceExpr);
         self.bump();
-        self.parse_expr_bp(BindingPower::Postfix);
+        self.parse_expr();
         self.expect_keyword(Keyword::As, "expected as in reduce expression");
         self.expect_binding_name();
         self.expect_punct(Punct::Comma, "expected ','");
@@ -121,7 +120,7 @@ impl<'a> Parser<'a> {
     fn parse_scan_expr(&mut self) {
         self.start_node(SyntaxKind::ScanExpr);
         self.bump();
-        self.parse_expr_bp(BindingPower::Postfix);
+        self.parse_expr();
         self.expect_keyword(Keyword::As, "expected as in scan expression");
         self.expect_binding_name();
         self.expect_keyword(Keyword::Until, "expected until in scan expression");
@@ -149,7 +148,7 @@ impl<'a> Parser<'a> {
             }
             TokenKind::Punct(Punct::OpenBracket) => {
                 self.start_node_at(checkpoint, SyntaxKind::IndexExpr);
-                self.bump();
+                self.expect_punct(Punct::OpenBracket, "expected '['");
                 self.parse_expr();
                 self.expect_close_punct(Punct::CloseBracket, "expected ']'");
                 self.finish_node();

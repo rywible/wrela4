@@ -1,7 +1,7 @@
 use crate::lexer::{Keyword, Punct, TokenKind};
 
 use super::parse::Parser;
-use super::syntax_kind::{SyntaxErrorKind, SyntaxKind};
+use super::syntax_kind::SyntaxKind;
 
 impl<'a> Parser<'a> {
     pub(crate) fn parse_type_ref(&mut self) {
@@ -33,10 +33,6 @@ impl<'a> Parser<'a> {
                 self.finish_node();
                 self.expect_close_punct(Punct::CloseBracket, "expected ']'");
             }
-        } else {
-            let span = self.peek().span();
-            self.diagnostic(span, "expected type");
-            self.builder.error(SyntaxErrorKind::ExpectedType, span);
         }
         self.finish_node();
     }

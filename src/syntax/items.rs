@@ -246,9 +246,17 @@ impl<'a> Parser<'a> {
             if parser.peek().kind() == TokenKind::Keyword(Keyword::Phase) {
                 parser.parse_phase_decl();
             } else {
-                parser.parse_error_item();
+                parser.parse_image_body_error();
             }
         });
+    }
+
+    fn parse_image_body_error(&mut self) {
+        self.start_node(SyntaxKind::RecoveryNode);
+        self.error_at_current(SyntaxErrorKind::UnexpectedToken, "unexpected token");
+        self.bump();
+        self.consume_to_image_body_boundary();
+        self.finish_node();
     }
 
     fn parse_member_error(&mut self) {
@@ -297,6 +305,9 @@ impl<'a> Parser<'a> {
             let span = self.peek().span();
             self.diagnostic(span, "expected from in use import");
             self.builder.error(SyntaxErrorKind::ExpectedFrom, span);
+            if self.peek().kind() == TokenKind::Identifier {
+                self.parse_module_path();
+            }
         }
         self.finish_node();
     }

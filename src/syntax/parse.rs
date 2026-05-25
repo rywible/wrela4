@@ -101,7 +101,11 @@ impl<'a> Parser<'a> {
         F: FnMut(&mut Self),
     {
         while self.before_close(close) {
+            let index_before = self.token_index;
             parse_element(self);
+            if self.token_index == index_before {
+                self.recover_delimited_element(close);
+            }
         }
         self.expect_close_punct(close, close_label);
     }
@@ -241,10 +245,15 @@ impl<'a> Parser<'a> {
         }
     }
 
-    /// Parameter, field, and local names may use lexed keywords (e.g. `host` in `host: Type`).
+    /// Parameter, field, and local names may use a small set of contextual keywords
+    /// (e.g. `host` in `host: Type`).
     pub(crate) fn expect_binding_name(&mut self) -> bool {
         match self.peek().kind() {
-            TokenKind::Identifier | TokenKind::Keyword(_) => {
+            TokenKind::Identifier => {
+                self.bump();
+                true
+            }
+            TokenKind::Keyword(keyword) if Self::is_contextual_binding_keyword(keyword) => {
                 self.bump();
                 true
             }
@@ -253,6 +262,13 @@ impl<'a> Parser<'a> {
                 false
             }
         }
+    }
+
+    fn is_contextual_binding_keyword(keyword: Keyword) -> bool {
+        matches!(
+            keyword,
+            Keyword::Host | Keyword::Target | Keyword::Value | Keyword::Same | Keyword::Until
+        )
     }
 
     pub(crate) fn expect_contextual_identifier(

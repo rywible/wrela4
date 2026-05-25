@@ -1,7 +1,7 @@
 use crate::lexer::{Keyword, Punct, TokenKind};
 
 use super::parse::Parser;
-use super::syntax_kind::SyntaxKind;
+use super::syntax_kind::{SyntaxErrorKind, SyntaxKind};
 
 impl<'a> Parser<'a> {
     pub(crate) fn recover_to_statement_boundary(&mut self) {
@@ -9,7 +9,28 @@ impl<'a> Parser<'a> {
             return;
         }
         self.start_node(SyntaxKind::RecoveryNode);
+        self.error_at_current(
+            SyntaxErrorKind::UnexpectedToken,
+            "unexpected token in statement",
+        );
+        self.bump();
         while !self.at_statement_boundary() {
+            self.bump();
+        }
+        self.finish_node();
+    }
+
+    pub(crate) fn recover_delimited_element(&mut self, close: Punct) {
+        if self.peek().kind() == TokenKind::Punct(close) {
+            return;
+        }
+        self.start_node(SyntaxKind::RecoveryNode);
+        self.error_at_current(SyntaxErrorKind::UnexpectedToken, "unexpected token");
+        self.bump();
+        while self.peek().kind() != TokenKind::Punct(close)
+            && self.peek().kind() != TokenKind::Eof
+            && self.peek().kind() != TokenKind::Punct(Punct::Comma)
+        {
             self.bump();
         }
         self.finish_node();
@@ -28,6 +49,17 @@ impl<'a> Parser<'a> {
                 TokenKind::Punct(Punct::CloseBrace) | TokenKind::Eof
             )
         {
+            self.bump();
+        }
+    }
+
+    pub(crate) fn consume_to_image_body_boundary(&mut self) {
+        while !matches!(
+            self.peek().kind(),
+            TokenKind::Keyword(Keyword::Phase)
+                | TokenKind::Punct(Punct::CloseBrace)
+                | TokenKind::Eof
+        ) {
             self.bump();
         }
     }

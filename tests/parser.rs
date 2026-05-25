@@ -259,3 +259,58 @@ fn parse_command_reports_reachable_files() {
         && line.contains("tokens=")
         && line.contains("items=")));
 }
+
+#[test]
+fn recovers_malformed_field_list_without_hanging() {
+    let parsed = parse_text("data Foo { , }");
+    assert!(has_errors(parsed.diagnostics()));
+    assert!(tree_contains(parsed.tree(), SyntaxKind::RecoveryNode));
+}
+
+#[test]
+fn recovers_malformed_match_arm_list_without_hanging() {
+    let parsed = parse_text("class C { fn m() { match x { , } } }");
+    assert!(has_errors(parsed.diagnostics()));
+    assert!(tree_contains(parsed.tree(), SyntaxKind::RecoveryNode));
+}
+
+#[test]
+fn image_body_recovery_preserves_following_top_level_item() {
+    let parsed = parse_text("image App target T { + } class After {}");
+    assert!(has_errors(parsed.diagnostics()));
+    assert_eq!(count_nodes(parsed.tree(), SyntaxKind::ClassDecl), 1);
+    assert!(tree_contains(parsed.tree(), SyntaxKind::ImageDecl));
+}
+
+#[test]
+fn reduce_and_scan_accept_full_expression_operands() {
+    let parsed = parse_fixture("assertions-reduce-scan.wrela");
+    assert!(!has_errors(parsed.diagnostics()));
+    assert!(tree_contains(parsed.tree(), SyntaxKind::ReduceExpr));
+    assert!(tree_contains(parsed.tree(), SyntaxKind::ScanExpr));
+    assert!(tree_contains(parsed.tree(), SyntaxKind::BinaryExpr));
+}
+
+#[test]
+fn rejects_reserved_keyword_as_let_binding_name() {
+    let parsed = parse_text("class C { fn m() { let return = 1 } }");
+    assert!(
+        parsed
+            .diagnostics()
+            .iter()
+            .any(|diagnostic| { diagnostic.message() == "expected identifier" })
+    );
+}
+
+#[test]
+fn use_without_from_still_parses_module_path() {
+    let parsed = parse_text("use { Foo } app.console\nclass After {}");
+    assert!(
+        parsed
+            .diagnostics()
+            .iter()
+            .any(|diagnostic| { diagnostic.message() == "expected from in use import" })
+    );
+    assert!(tree_contains(parsed.tree(), SyntaxKind::ModulePath));
+    assert_eq!(count_nodes(parsed.tree(), SyntaxKind::ClassDecl), 1);
+}

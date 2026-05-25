@@ -35,7 +35,11 @@ impl<'a> Parser<'a> {
     fn parse_let_stmt(&mut self) {
         self.start_node(SyntaxKind::LetStmt);
         self.bump();
-        self.expect_binding_name();
+        if !self.expect_binding_name() {
+            self.eat_punct(Punct::Semicolon);
+            self.finish_node();
+            return;
+        }
         let has_type = if self.eat_punct(Punct::Colon) {
             self.parse_type_ref();
             true
@@ -70,7 +74,11 @@ impl<'a> Parser<'a> {
 
     fn parse_expr_stmt(&mut self) {
         self.start_node(SyntaxKind::ExprStmt);
+        let diagnostics_before = self.diagnostics.len();
         self.parse_expr();
+        if self.diagnostics.len() > diagnostics_before {
+            self.recover_to_statement_boundary();
+        }
         self.eat_punct(Punct::Semicolon);
         self.finish_node();
     }
