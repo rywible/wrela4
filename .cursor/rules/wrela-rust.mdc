@@ -48,5 +48,5 @@ There is no CI. Run `./scripts/quality-gate.sh` before claiming work complete.
 ## Plan work
 
 - Implement plans on a **feature branch** in the main repo (`git checkout -b feat/<name>` from `main`). Do not use a worktree by default.
-- Subagents must not run `cargo` or `./scripts/quality-gate.sh`; the orchestrator verifies sequentially (see `.cursor/rules/plan-orchestration.mdc`).
+- Subagents may run focused task commands with timeouts, but must not run `./scripts/quality-gate.sh`, strict clean gates, review scripts, broad stress commands, or unbounded watch/server processes; the orchestrator verifies sequentially (see `.cursor/rules/plan-orchestration.mdc`).
 - Complete Phase A before handoff; fix **every** Phase A and user-feedback item (all severities) unless explicitly disagreed and documented; merge after feedback is fully resolved (see multi-model review skill).

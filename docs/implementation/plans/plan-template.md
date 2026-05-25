@@ -43,10 +43,12 @@ order and re-runs verification after conflicts.
 
 ## Subagent Verification Discipline
 
-Subagents implement code and fixtures only. They **must not** run `cargo`,
-`./scripts/quality-gate.sh`, or Wrela CLI commands — parallel builds/tests can
-exhaust the host. The **orchestrator** runs focused tests and the quality gate
-sequentially after each subagent returns and before marking a task complete.
+Subagents may run focused `cargo test`, `cargo check`, or Wrela CLI commands for
+their task, but every command must have a timeout in the execution tool and must
+stay scoped to the task. Subagents must not run `./scripts/quality-gate.sh`,
+strict clean gates, broad stress commands, or unbounded watch/server processes.
+The **orchestrator** runs full verification and the quality gate sequentially
+after each subagent returns and before marking a task complete.
 
 ## Review and feedback fix policy
 

@@ -22,31 +22,39 @@ You are the **orchestrator**. You are accountable for the full plan AC and the q
 
 ## Subagent execution
 
-- **Use subagents heavily** for plan tasks — but only for **code and fixture edits**.
+- **Use subagents heavily** for plan tasks.
 - Give subagents **very explicit instructions**: files, AC, locked decisions, and what not to change.
 - **Parallelize code work** — launch independent subagents concurrently whenever the plan's Parallel Work Map allows it.
 - Read the plan's dependency graph before scheduling work; never parallelize tasks that share mutable files without a merge/re-verify step.
 
-### Subagents must NOT run Rust / Wrela commands
+### Subagent command limits
 
-**Subagents write code; the orchestrator verifies.** Running `cargo`, `rustc`, `./scripts/quality-gate.sh`, `cargo run -- …`, or `./scripts/plan-review*.sh` from multiple subagents in parallel can exhaust the machine. Only the **orchestrator** runs build and test commands.
+Subagents may run focused Rust/Wrela commands needed for their task, but every command must have an execution timeout and must stay narrow. Running broad or unbounded commands from multiple subagents in parallel can exhaust the machine.
+
+**Allowed in subagent prompts and subagent sessions with a timeout:**
+
+- focused `cargo test <single-filter>` or `cargo test --test <target> <single-filter>`
+- focused `cargo check` when the task needs compile feedback
+- focused Wrela CLI invocations against task fixtures
 
 **Forbidden in subagent prompts and subagent sessions:**
 
-- `cargo build`, `cargo check`, `cargo test`, `cargo clippy`, `cargo fmt`, `cargo run`
 - `./scripts/quality-gate.sh` and any `plan-review*.sh` script
-- Any Wrela CLI invocation (`cargo run -- lex`, `parse`, `dump tokens`, etc.)
+- strict clean gates
+- broad stress commands
+- unbounded watch/server processes
+- parallel full-workspace `cargo test`, `cargo clippy`, or `cargo fmt` runs unless the orchestrator explicitly assigns that task
 
-**Subagent deliverable:** changed files, a short summary of what was implemented, and the **verification commands the orchestrator should run** — not claims that tests passed.
+**Subagent deliverable:** changed files, a short summary of what was implemented, focused command results when run, and the verification commands the orchestrator should run.
 
 **Orchestrator verification loop (after each subagent returns):**
 
 1. Review the diff against task AC.
-2. Run the task's focused tests, then `./scripts/quality-gate.sh` — **sequentially**, one task at a time.
-3. Fix gaps yourself or send the subagent back with concrete failures; do not treat subagent "tests passed" as done until **you** have run them.
+2. Run or re-run the task's focused tests, then `./scripts/quality-gate.sh` — **sequentially**, one task at a time.
+3. Fix gaps yourself or send the subagent back with concrete failures; subagent "tests passed" is useful evidence but the orchestrator still owns verification.
 4. Commit (or have the subagent commit **only after** orchestrator verification passes, if commits stay in subagent scope).
 
-When launching subagents, include explicitly: **"Do not run cargo, quality-gate, or wrela CLI commands. Return your changes and list verification commands for the orchestrator."**
+When launching subagents, include explicitly: **"You may run focused task commands with a timeout. Do not run quality-gate, plan-review scripts, strict clean gates, broad stress commands, or unbounded watch/server processes. Return your changes, command results, and verification commands for the orchestrator."**
 
 ## Production quality (non-negotiable)
 
@@ -89,7 +97,7 @@ If a subagent fails or skips AC, you fix it — do not report partial progress a
 
 ## Review gate (orchestrator-owned)
 
-The orchestrator runs every review script and verification command. Subagents never run `plan-review*.sh`.
+The orchestrator runs every review script and full verification command. Subagents never run `plan-review*.sh`.
 
 Run from the **repo root** on the feature branch (review scripts accept `.` as the repo path):
 

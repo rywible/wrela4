@@ -83,7 +83,7 @@ See [`.cursor/rules/plan-orchestration.mdc`](.cursor/rules/plan-orchestration.md
    ```
 
 2. Execute the plan on that branch task-by-task.
-3. **Subagents edit code only** — they must not run `cargo`, `./scripts/quality-gate.sh`, or Wrela CLI commands. The orchestrator runs all build/test verification sequentially after each subagent returns.
+3. **Subagents may run focused commands with timeouts** — subagents may run the narrow `cargo test`, `cargo check`, or Wrela CLI command needed for their task, but every command must have an execution timeout and must stay scoped to the task. Subagents must not run `./scripts/quality-gate.sh`, strict clean gates, broad stress commands, or unbounded watch/server processes. The orchestrator runs full build/test verification sequentially after each subagent returns.
 4. Run `./scripts/quality-gate.sh` after each task and before review.
 5. Complete **Phase A** (thermo-nuclear self review) before returning for **user feedback** — fix **every** Phase A finding at every priority/severity unless you explicitly disagree and document why in the verdict.
 
