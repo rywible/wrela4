@@ -1,62 +1,53 @@
 #!/usr/bin/env bash
-# Canonical local quality gate. There is no CI — run this before claiming done.
-# Usage: scripts/quality-gate.sh [repo-root]
+# Local verifier — there is no CI.
+# Usage: ./scripts/quality-gate.sh
+# Strict: QUALITY_GATE_STRICT_CLEAN=1 ./scripts/quality-gate.sh
 set -euo pipefail
 
-ROOT="${1:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 
-echo "=== quality gate: $ROOT ==="
-echo ""
+step() {
+  echo "→ $1"
+  shift
+  "$@"
+  echo
+}
 
-echo "--- cargo fmt --check ---"
-cargo fmt --check
-echo "PASS"
-echo ""
+echo "quality gate"
+echo
 
-echo "--- RUSTFLAGS=-D warnings cargo check --all-targets ---"
-RUSTFLAGS="-D warnings" cargo check --all-targets
-echo "PASS"
-echo ""
+step "cargo fmt --check" cargo fmt --check
+step "cargo check" env RUSTFLAGS="-D warnings" cargo check --all-targets
+step "cargo clippy" cargo clippy --all-targets -- -D warnings
+step "cargo test" cargo test
 
-echo "--- cargo clippy --all-targets -- -D warnings ---"
-cargo clippy --all-targets -- -D warnings
-echo "PASS"
-echo ""
-
-echo "--- cargo test ---"
-cargo test
-echo "PASS"
-echo ""
-
-echo "--- forbidden marker scan (src/) ---"
+echo "→ forbidden markers in src/"
 if rg -n '\b(todo!|unimplemented!)\s*\(|\bunsafe\b' src --glob '*.rs' 2>/dev/null; then
-  echo "FAIL: forbidden markers in production source"
+  echo "failed: todo!/unimplemented!/unsafe in production source"
   exit 1
 fi
-echo "PASS (no matches)"
-echo ""
+echo
 
 if [[ -f Cargo.toml ]]; then
-  echo "--- cargo metadata (deps) ---"
-  pkg_count="$(cargo metadata --no-deps --format-version 1 | python3 -c 'import json,sys; print(len(json.load(sys.stdin)["packages"]))')"
-  if [[ "$pkg_count" != "1" ]]; then
-    echo "FAIL: expected 1 package (zero deps), got $pkg_count"
+  echo "→ zero external dependencies"
+  count="$(cargo metadata --no-deps --format-version 1 \
+    | python3 -c 'import json,sys; print(len(json.load(sys.stdin)["packages"]))')"
+  if [[ "$count" != "1" ]]; then
+    echo "failed: expected 1 package, got $count"
     exit 1
   fi
-  echo "PASS (zero external dependencies)"
-  echo ""
+  echo
 fi
 
 if [[ "${QUALITY_GATE_STRICT_CLEAN:-0}" == "1" ]]; then
-  echo "--- git status (strict clean) ---"
+  echo "→ clean git working tree"
   if [[ -n "$(git status --porcelain)" ]]; then
     git status --short
-    echo "FAIL: working tree not clean"
+    echo "failed: uncommitted changes"
     exit 1
   fi
-  echo "PASS"
-  echo ""
+  echo
 fi
 
-echo "=== quality gate passed ==="
+echo "quality gate passed"

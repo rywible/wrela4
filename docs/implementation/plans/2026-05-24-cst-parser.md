@@ -119,10 +119,8 @@ fixtures/
     parser_harness_smoke.wrela
     recovery.wrela
 docs/
-  design/compiler-pipeline.md
-  design/locked-decisions.md
-  design/supported-wrela-subset.md
-  implementation/README.md
+  AGENTS.md
+  design-principles.md
 ```
 
 ## Public API Shape
@@ -2986,87 +2984,26 @@ git commit -m "feat: add parse CLI command -Codex Automated"
 ### Task 14: Update Documentation
 
 **Files:**
-- Modify: `docs/design/compiler-pipeline.md`
-- Modify: `docs/design/locked-decisions.md`
-- Modify: `docs/design/supported-wrela-subset.md`
-- Modify: `docs/implementation/README.md`
+- Modify: `AGENTS.md`
+- Modify: `docs/design-principles.md`
 
-**Description:** Document the implemented parser, parser locked decisions, parse command, and supported syntax.
+**Description:** Document the implemented parser in agent-facing docs. *(This task originally updated `locked-decisions.md`, `compiler-pipeline.md`, `supported-wrela-subset.md`, and `implementation/README.md`; those files were removed.)*
 
-- [ ] **Step 1: Update locked decisions**
+- [ ] **Step 1: Update agent docs**
 
-Add these rows to `docs/design/locked-decisions.md`:
+Ensure [`AGENTS.md`](../../AGENTS.md) lists parser and `wrela parse` in useful commands and implementation status. Capture parser locked decisions in [`docs/design-principles.md`](../../design-principles.md) or ADRs as needed.
 
-```markdown
-## Parser (implemented)
-
-| Decision | Detail |
-|----------|--------|
-| Parser strategy | Handwritten recursive descent with Pratt expression parsing |
-| Tree shape | Lossless CST first; typed views are derived from CST nodes |
-| Trivia | Attached to token elements as leading/trailing ranges; not peer CST children |
-| Coverage | V1 parser covers declarations, member bodies, statements, expressions, imports, and recovery |
-| Imports | CST parser accepts explicit import binders only; aliases and wildcards are parser errors |
-| Recovery | Malformed source produces diagnostics and recovery nodes, not parser panics |
-| Parser parallelism | `parse_files_parallel` uses chunked scoped workers and deterministic `FileId` sorting |
-| CLI surface | `wrela parse <root.wrela>` inspects parse output; `wrela check` remains out of scope |
-```
-
-- [ ] **Step 2: Update supported subset**
-
-Replace the "Not supported yet" parser bullet in `docs/design/supported-wrela-subset.md` with:
-
-```markdown
-## Parser: CST syntax accepted
-
-- Module declarations: `module app.root`
-- Imports: `use { Name, Other } from module.segment`
-- Top-level declarations: `data`, `layout <abi> data`, `class`, `unique class`, `interface`, `error`, `image`, `host image`, and `pub <item>`
-- Members: fields, constructors, `fn`, `asm fn`, `test`, and image `phase`
-- Types: dotted names, access-qualified types (`read`, `mut`, `own`, `unique`), generic arguments, and integer const generic arguments
-- Statements: `let`, `return`, expression statements, `match`, `repeat`, `for`, `drain`, `loop`, `assert value`, and `assert same`
-- Expressions: names, integer/string literals, parenthesized expressions, prefix operators, calls, named/positional args, field/index access, binary operators, `try ... else return`, `reduce`, and `scan`
-
-Unsupported import forms:
-
-- `use { Name as Alias } from module.segment`
-- `use { * } from module.segment`
-```
-
-- [ ] **Step 3: Update pipeline and implementation status**
-
-In `docs/design/compiler-pipeline.md`, add `Parse["parse_files_parallel\n(per reachable LexedFile)"]` between `Import` and `Merge`, and add this row:
-
-```markdown
-| `syntax::parse` | `LexedFile` + `SourceFile` | `ParsedSyntax` | Lossless CST + parser diagnostics |
-```
-
-Add public APIs:
-
-```rust
-pub fn syntax::parse_file(lexed: &LexedFile, source: &SourceFile) -> ParsedSyntax;
-pub fn syntax::parse_files_parallel(lexed_files: &[LexedFile], source_map: &SourceMap) -> Vec<ParsedSyntax>;
-```
-
-In `docs/implementation/README.md`, replace the parser status row with:
-
-```markdown
-| [CST parser](plans/2026-05-24-cst-parser.md) | **Complete** | Lossless CST parser + `wrela parse` |
-```
-
-- [ ] **Step 4: Verify**
+- [ ] **Step 2: Verify**
 
 ```bash
-rg -n "Parser \\| Not started|Full parser / AST|not supported yet" docs
+rg -n "Parser \\| Not started|Full parser / AST|not supported yet" docs AGENTS.md
 ./scripts/quality-gate.sh
 ```
 
-Expected: no stale doc says the parser is not started.
-
-- [ ] **Step 5: Commit**
+- [ ] **Step 3: Commit**
 
 ```bash
-git add docs/design/compiler-pipeline.md docs/design/locked-decisions.md docs/design/supported-wrela-subset.md docs/implementation/README.md
+git add AGENTS.md docs/design-principles.md
 git commit -m "docs: document CST parser support -Codex Automated"
 ```
 
@@ -3078,12 +3015,12 @@ git commit -m "docs: document CST parser support -Codex Automated"
 
 ---
 
-### Task 15: Final Quality Gate And Review Packet
+### Task 15: Final Quality Gate And Self Review
 
 **Files:**
-- Review artifacts generated under `docs/implementation/reviews/`
+- Review artifacts under `docs/implementation/reviews/` (ephemeral)
 
-**Description:** Complete local verification and the repository's Phase A, Phase B, and Phase C review workflow.
+**Description:** Complete local verification and Phase A self review before handoff.
 
 - [ ] **Step 1: Run verification**
 
@@ -3092,60 +3029,18 @@ git commit -m "docs: document CST parser support -Codex Automated"
 QUALITY_GATE_STRICT_CLEAN=1 ./scripts/quality-gate.sh
 ```
 
-- [ ] **Step 2: Save verification log**
+- [ ] **Step 2: Complete Phase A self review**
 
-```bash
-./scripts/plan-review-save-verification.sh docs/implementation/plans/2026-05-24-cst-parser.md .worktrees/feat-cst-parser
-```
+Adversarial self review per `docs/implementation/reviews/README.md`. Fix findings; hand off only on honest **`Verdict: APPROVED`**.
 
-- [ ] **Step 3: Create Phase A self-review file**
+- [ ] **Step 3: Return for user feedback**
 
-Use the documented per-plan suffix `review-self`. Write `docs/implementation/reviews/2026-05-24-cst-parser-review-self.md` in the worktree with this verdict header after completing the self-review:
-
-```markdown
-## Verdict: APPROVED
-```
-
-The self-review must list checked diffs, verification output location, and any fixes made before approval.
-
-- [ ] **Step 4: Verify Phase A**
-
-```bash
-./scripts/plan-review-check-phase-a.sh .worktrees/feat-cst-parser docs/implementation/plans/2026-05-24-cst-parser.md
-```
-
-- [ ] **Step 5: Run Phase B**
-
-```bash
-./scripts/plan-review.sh docs/implementation/plans/2026-05-24-cst-parser.md .worktrees/feat-cst-parser
-```
-
-- [ ] **Step 6: Loop on review findings**
-
-For every blocking finding, apply the smallest production fix, add or update a targeted test, run `./scripts/quality-gate.sh`, commit, re-run Phase A, then re-run Phase B.
-
-- [ ] **Step 7: Clean review artifacts after approvals**
-
-```bash
-./scripts/plan-review-cleanup.sh .worktrees/feat-cst-parser docs/implementation/plans/2026-05-24-cst-parser.md
-```
-
-- [ ] **Step 8: Commit final cleanup if any tracked files changed**
-
-```bash
-git status --short
-git add -u
-git commit -m "chore: clean parser review artifacts -Codex Automated"
-```
-
-Expected: if `git status --short` is clean after cleanup, skip the commit.
+Hand off when Phase A is APPROVED and the quality gate passes. Address user feedback, re-run the quality gate, and re-run Phase A if code changed.
 
 **Acceptance Criteria:**
 
 - Quality gate and strict clean quality gate pass.
-- Phase A self review has `## Verdict: APPROVED`.
-- Claude and Codex Phase B reviews are approved or all blocking findings are resolved.
-- Interim review artifacts are removed before merge.
+- Phase A honestly **APPROVED** (no unresolved findings).
 
 ## Self-Review Checklist
 
@@ -3158,5 +3053,5 @@ Expected: if `git status --short` is clean after cleanup, skip the commit.
 - Trivia attachment preserves file-leading whitespace, comments through the first trailing newline, blank lines, and indentation.
 - Tests assert `SyntaxKind` presence for declarations, expressions, statements, and recovery.
 - Import aliases and wildcards have explicit diagnostics and tests.
-- Review script invocations match script usage.
+- Review workflow matches docs/implementation/reviews/README.md.
 - `./scripts/quality-gate.sh` passes after this plan file is written.

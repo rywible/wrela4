@@ -5,8 +5,8 @@ This file orients coding agents working in the Wrela repository.
 ## Start here
 
 1. [`docs/design-principles.md`](docs/design-principles.md) — language and toolchain principles
-2. [`docs/design/locked-decisions.md`](docs/design/locked-decisions.md) — rules you must not violate
-3. [`docs/implementation/README.md`](docs/implementation/README.md) — plan status and workflow
+2. [`docs/implementation/reviews/README.md`](docs/implementation/reviews/README.md) — plan review workflow
+3. [`docs/implementation/plans/`](docs/implementation/plans/) — active and completed implementation plans
 
 ## What this repo is
 
@@ -15,8 +15,7 @@ command center**: a zero-dependency compiler nucleus and CLI in a single Cargo
 package named `wrela`.
 
 **Current implementation status:** lexer, discovery, CST parser, and **`wrela check`**
-(semantic checking for the parser-supported subset) are complete — see
-[`docs/implementation/README.md`](docs/implementation/README.md). `wrela build`
+(semantic checking for the parser-supported subset) are complete. `wrela build`
 and `wrela test` are not started.
 
 ## Source layout
@@ -38,13 +37,12 @@ fixtures/lexer/    .wrela fixtures for lexer tests and manual CLI runs
 fixtures/check/    .wrela fixtures for check diagnostics and smoke tests
 docs/
   design-principles.md
-  design/          language spec, ADRs, architecture, supported syntax subset
-  implementation/  plans, review harness, roadmap
-scripts/           quality gate, plan review
+  design/          ADRs and design proposals
+  implementation/  plans and review workflow
+scripts/           quality gate
 ```
 
-See [`docs/design/compiler-pipeline.md`](docs/design/compiler-pipeline.md) for
-how phases connect.
+Phases: discover → lex → parse → check (`src/check/`). Only `command.rs` prints.
 
 ## Non-negotiables
 
@@ -55,7 +53,7 @@ how phases connect.
 - **Root-driven reachability** — no manifests; discovery starts from a root `.wrela` file.
 - **Rust 2024**, `rust-version = "1.85"`, edition 2024 in `Cargo.toml`.
 
-Full list: [`docs/design/locked-decisions.md`](docs/design/locked-decisions.md).
+See [`docs/design-principles.md`](docs/design-principles.md) and ADRs under [`docs/design/`](docs/design/) for full rules.
 
 Rust-specific conventions: [`.cursor/rules/wrela-rust.mdc`](.cursor/rules/wrela-rust.mdc).
 
@@ -89,15 +87,15 @@ See [`.cursor/rules/plan-orchestration.mdc`](.cursor/rules/plan-orchestration.md
 2. Execute the plan on that branch task-by-task.
 3. **Subagents may run focused commands with timeouts** — subagents may run the narrow `cargo test`, `cargo check`, or Wrela CLI command needed for their task, but every command must have an execution timeout and must stay scoped to the task. Subagents must not run `./scripts/quality-gate.sh`, strict clean gates, broad stress commands, or unbounded watch/server processes. The orchestrator runs full build/test verification sequentially after each subagent returns.
 4. Run `./scripts/quality-gate.sh` after each task and before review.
-5. Complete **Phase A** (thermo-nuclear self review) before returning for **user feedback** — fix **every** Phase A finding at every priority/severity unless you explicitly disagree and document why in the verdict.
+5. Complete **Phase A** (adversarial thermo-nuclear self review) before returning for **user feedback** — fix **every** finding; hand off only on honest **`Verdict: APPROVED`**. **`Verdict: NOT APPROVED`** means keep working.
 
-6. After user feedback: fix **every suggestion** (including low priority, maintenance smells, and items labeled deferred/non-blocking) unless explicitly disagreed and documented → quality gate → re-run Phase A if code changed.
+6. After user feedback: fix **every suggestion** (including low priority, maintenance smells, and items labeled deferred/non-blocking) unless explicitly disagreed and documented → quality gate → re-run Phase A in handoff if code changed.
 
-7. When the user directs merge: Phase C cleanup → merge feature branch into `main` → delete the feature branch.
+7. When the user directs merge: merge feature branch into `main` → delete the feature branch.
 
-**Do not stop after implementation commits** without Phase A APPROVED on disk. **Do not merge** until all non-disagreed feedback is resolved. **Do not defer** review items because of priority labels. The orchestrator does **not** run automated Phase B (`plan-review.sh`).
+**Do not hand off** while Phase A has unresolved findings. **Do not merge** until all non-disagreed feedback is resolved. **Do not defer** review items because of priority labels. **Do not rubber-stamp APPROVED.**
 
-   See [`.cursor/skills/multi-model-plan-review/SKILL.md`](.cursor/skills/multi-model-plan-review/SKILL.md)
+See [`.cursor/skills/multi-model-plan-review/SKILL.md`](.cursor/skills/multi-model-plan-review/SKILL.md)
    and [`docs/implementation/reviews/README.md`](docs/implementation/reviews/README.md).
 
 New plans: copy [`docs/implementation/plans/plan-template.md`](docs/implementation/plans/plan-template.md).
@@ -117,7 +115,7 @@ Read-only semantic validation (summaries → resolve → types → bodies → ow
 - Lex/parse only → `wrela lex` / `wrela parse` (not check)
 - Repo handoff → `./scripts/quality-gate.sh` (orchestrator only; subagents: focused check commands with timeout)
 
-**API:** `wrela::check::check_root(path)` → `CheckResult`; render via `diagnostic::render_diagnostics`. Codes: [`docs/design/diagnostic-codes.md`](docs/design/diagnostic-codes.md). Fixtures: [`fixtures/check/`](fixtures/check/).
+**API:** `wrela::check::check_root(path)` → `CheckResult`; render via `diagnostic::render_diagnostics`. Codes: `DiagnosticCode` in `src/diagnostic.rs`. Fixtures: [`fixtures/check/`](fixtures/check/).
 
 ## Useful commands
 

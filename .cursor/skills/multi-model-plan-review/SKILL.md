@@ -1,21 +1,19 @@
 ---
 name: multi-model-plan-review
-description: Run thermo-nuclear self-review before returning from plan implementation; user provides feedback; then merge and cleanup. Use when implementing plans from docs/implementation/plans/.
+description: Run thermo-nuclear self-review before returning from plan implementation; user provides feedback; then merge. Use when implementing plans from docs/implementation/plans/.
 ---
 
-# Plan Review (Phase A + user feedback)
+# Plan review (Phase A + user feedback)
 
 Gate before handing a plan implementation back to the user:
 
-1. **Phase A — Self review:** thermo-nuclear code quality review (loop until APPROVED on disk)
+1. **Phase A — Self review:** adversarial thermo-nuclear review; fix what it finds; hand off only when genuinely clean
 2. **User feedback:** the user reviews the work and provides feedback in chat
-3. **Post-feedback:** address feedback → quality gate → re-run Phase A if code changed → **Phase C** cleanup and merge
-
-**The orchestrator does not run Phase B** (`plan-review.sh`, Claude Code CLI, or Codex CLI). Those scripts remain available for optional manual use but are not part of the agent completion gate.
+3. **Post-feedback:** address feedback → quality gate → re-run Phase A if code changed → merge
 
 ---
 
-## Branch setup (not worktree)
+## Branch setup
 
 Implement on a **feature branch** in the main repo checkout:
 
@@ -24,22 +22,21 @@ git checkout main
 git checkout -b feat/<name>
 ```
 
-Stay in the same workspace. Do **not** use `./scripts/plan-worktree-new.sh` unless the user explicitly requests a worktree.
+Stay in the same workspace. Do not use a separate git worktree unless the user explicitly asks.
 
 ---
 
 ## Completion gate (orchestrator)
 
-**Stop and return to the user when:**
+**Return to the user only when all of these are true:**
 
 - All plan tasks implemented on the feature branch
 - `./scripts/quality-gate.sh` passes
-- Phase A verdict on disk: `## Verdict: APPROVED`
-- `./scripts/plan-review-check-phase-a.sh . docs/implementation/plans/<plan>.md` passes
+- Phase A self review found **no unresolved findings** (see verdict rules below)
 
 **Do not merge** until the user has reviewed and you have worked through their feedback.
 
-Review scripts take the **repo root** as their path argument — use `.` when already on the feature branch.
+If Phase A still has open findings, **keep working** — do not hand off yet.
 
 ---
 
@@ -47,39 +44,37 @@ Review scripts take the **repo root** as their path argument — use `.` when al
 
 See skill file at `~/.cursor/plugins/cache/cursor-public/cursor-team-kit/*/skills/thermo-nuclear-code-quality-review/SKILL.md`.
 
-### Steps
+**Purpose:** find real problems — correctness gaps, missing tests, locked-decision violations, maintainability risks. This is not a formality.
 
-1. Review branch diff (`BASE_SHA..HEAD`)
-2. Save verification log (optional but recommended):
+**Do not write a review file to disk.** Return the review in your handoff message.
 
-   ```bash
-   ./scripts/plan-review-save-verification.sh docs/implementation/plans/<plan>.md .
-   ```
+### Verdict rules
 
-3. **Write** `docs/implementation/reviews/<slug>-review-self-thermonuclear.md`
-4. Verify:
+| Outcome | Meaning | Next step |
+|---------|---------|-----------|
+| **`Verdict: APPROVED`** | No unresolved findings, or every remaining skip is under **Explicit disagreements** with rationale | Hand off to user |
+| **`Verdict: NOT APPROVED`** | One or more findings still open | Fix → quality gate → re-review. **Do not hand off.** |
 
-   ```bash
-   ./scripts/plan-review-check-phase-a.sh . docs/implementation/plans/<plan>.md
-   ```
+**Forbidden:** rubber-stamping APPROVED while findings remain; “Deferred” / “non-blocking” lists without a documented disagreement per item; skipping P2+ because they look optional.
 
-5. **Return to the user** for feedback
+### Handoff format (when APPROVED)
 
-### Phase A loop (before first handoff)
+Include a **Self review** section with:
+
+- What you checked (diff scope, tests run, plan AC)
+- Findings by category — or an honest “none found” after adversarial review
+- **`Verdict: APPROVED`** or **`Verdict: NOT APPROVED`**
+- **Explicit disagreements** (if any): item skipped + rationale
+
+Use APPROVED only when you would stake the branch on it. If anything material is still open, use NOT APPROVED and keep looping.
+
+### Phase A loop
 
 ```text
-fix required items
-  → ./scripts/quality-gate.sh
-  → re-run thermo-nuclear self review
-  → write/update *-review-self-thermonuclear.md
-  → repeat until ## Verdict: APPROVED
+run thermo-nuclear self review
+  → findings? fix them → ./scripts/quality-gate.sh → re-review
+  → repeat until Verdict: APPROVED (honest) → hand off
 ```
-
-### Phase A fix policy
-
-When Phase A lists findings under **Required fixes**, **Missed simplification**, **Spaghetti**, **File-size**, or any other section, implement **every item at every priority and severity** before writing `## Verdict: APPROVED` — unless you **explicitly disagree** and document why in the verdict under **Explicit disagreements**.
-
-**Forbidden:** silently skipping P2+ or “optional” items; APPROVED verdicts with “Deferred” / “non-blocking” lists unless each skipped item has a documented disagreement.
 
 ### User feedback fix policy
 
@@ -88,57 +83,27 @@ After Phase A handoff, the user provides feedback in chat. For each feedback rou
 ```text
 implement every suggestion (all severities, including low priority)
   → ./scripts/quality-gate.sh
-  → re-run Phase A (update verdict if code changed)
+  → re-run Phase A in handoff if code changed
   → return to user or proceed to merge when user says to merge
 ```
 
-Implement **every** suggestion from the feedback — Critical through 🟢, “maintenance smell”, “low-hanging”, “deferred”, etc. **Do not defer** because the reviewer labeled something low priority.
+Implement **every** suggestion — Critical through 🟢, “maintenance smell”, “deferred”, etc. **Do not defer** because the reviewer labeled something low priority.
 
-**Only exception:** **explicit disagreement** documented in the next Phase A verdict (item + rationale). Undocumented skips are forbidden.
+**Only exception:** **explicit disagreement** documented in the next Phase A handoff (item + rationale).
 
 **Merge only when the user directs you to merge** and all non-disagreed feedback is resolved.
 
-### Plan amendment (conditional)
-
-**Required when:** code-judo items changed plan assumptions.
-
-Write `<slug>-plan-amendment.md` using `docs/implementation/reviews/plan-amendment-template.md`.
-
 ---
 
-## User feedback loop (replaces automated Phase B)
-
-See **User feedback fix policy** above — same fix-everything rule as Phase A.
-
----
-
-## Phase C — Cleanup and merge
+## Merge
 
 Run **after user feedback is addressed** and the user asks to merge.
 
 ```bash
-./scripts/plan-review-cleanup.sh . docs/implementation/plans/<plan>.md
 git checkout main
 git merge feat/<branch> --no-ff -m "feat: ..."
 ./scripts/quality-gate.sh
 git branch -d feat/<branch>
 ```
 
-### Interim artifacts (do not merge to main)
-
-Remove before merge (via cleanup script):
-
-- `<slug>-review-self-thermonuclear.md`
-- `<slug>-review-packet.md` (if present)
-- `<slug>-verification.log`
-- Any optional CLI review outputs (`*-review-claude.md`, `*-review-codex.md`)
-
-**Keep on main:** templates and `docs/implementation/reviews/README.md`.
-
----
-
-## Optional: manual external review (not orchestrator gate)
-
-`./scripts/plan-review.sh docs/implementation/plans/<plan>.md .` can still be run manually for Claude + Codex reviews. It is **not** required for the orchestrator to return or merge.
-
-See `docs/implementation/reviews/README.md` for script configuration.
+See `docs/implementation/reviews/README.md` for the full workflow.

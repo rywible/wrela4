@@ -531,13 +531,13 @@ The quality gate remains:
 9. Add `parse_files_parallel`.
 10. Wire a read-only `wrela parse <root.wrela>` CLI surface that discovers,
    lexes, parses, reports summaries, and exits 1 on errors.
-11. Update `supported-wrela-subset.md`, `compiler-pipeline.md`, and
-    `locked-decisions.md` after implementation decisions are accepted.
+11. Update [`AGENTS.md`](../AGENTS.md) and [`docs/design-principles.md`](../design-principles.md)
+    after implementation decisions are accepted.
 
 ## Proposed Locked Decisions After Acceptance
 
-If this proposal is accepted, add parser decisions to
-`docs/design/locked-decisions.md` during the implementation plan:
+If this proposal is accepted, document parser decisions in
+[`AGENTS.md`](../AGENTS.md) during the implementation plan:
 
 - The first full parser is handwritten recursive descent with Pratt expression
   parsing.

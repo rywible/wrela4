@@ -25,9 +25,8 @@ tests/
 fixtures/check/
   diagnostics/  reviewable examples used by docs and CLI smoke tests
 docs/
-  design/locked-decisions.md
-  design/diagnostic-codes.md
-  implementation/README.md
+  AGENTS.md              check CLI and agent rules
+  design-principles.md
 ```
 
 ## Real Parallel Work
@@ -761,9 +760,7 @@ Expected result: tests pass.
 - Create: `fixtures/check/diagnostics/unknown-type.wrela`
 - Create: `fixtures/check/diagnostics/use-after-move.wrela`
 - Create: `fixtures/check/diagnostics/layout-invalid.wrela`
-- Modify: `docs/design/locked-decisions.md`
-- Modify: `docs/design/diagnostic-codes.md`
-- Modify: `docs/implementation/README.md`
+- Modify: `AGENTS.md`
 
 **Description:** Add structured semantic facts for future agentic commands and lock concrete diagnostic examples into fixtures and docs.
 
@@ -971,19 +968,17 @@ The exact suggestion JSON shape is:
 
 - [ ] **Step 5: Update docs**
 
-Update `docs/design/locked-decisions.md` with these locked rules:
+Update [`AGENTS.md`](../../AGENTS.md) with the `wrela check` section and these rules:
 
 ```markdown
 - `wrela check` is read-only; formatting is a separate future command.
 - `wrela check` emits JSON by default. Human diagnostics require `--human`.
-- Diagnostic codes are stable and owned by `docs/design/diagnostic-codes.md`.
+- Diagnostic codes are stable and live in `DiagnosticCode` (`src/diagnostic.rs`).
 - Suggested fixes must include applicability and source-hash preconditions.
 - MIR lowering must consume semantic artifacts, not canonical source text.
 ```
 
-Update `docs/implementation/README.md` status table so `wrela check` is marked as implemented for the parser-supported semantic subset. Note that `wrela build` and `wrela test` remain not started.
-
-Ensure `docs/design/diagnostic-codes.md` contains every code emitted by ownership, effects, and layout checks.
+Ensure `DiagnosticCode` in `src/diagnostic.rs` covers every code emitted by ownership, effects, and layout checks.
 
 - [ ] **Step 6: Run focused product tests**
 
@@ -1034,7 +1029,7 @@ Expected result: strict quality gate passes before final handoff or merge. If re
 
 - [ ] **Step 4: Complete Phase A review**
 
-Run the repository Phase A review workflow described in `docs/implementation/reviews/README.md`. Save the APPROVED verdict on disk. Fix every finding at every severity unless the verdict includes an explicit technical disagreement with rationale.
+Run the Phase A workflow in `docs/implementation/reviews/README.md`: adversarial self review, fix findings, hand off only on honest **`Verdict: APPROVED`**. Document explicit disagreements with rationale when skipping an item.
 
 Phase A means a self-review that looks for correctness bugs, missing tests, locked-decision violations, diagnostic quality failures, and maintainability risks before user feedback.
 
@@ -1055,4 +1050,4 @@ git commit -m "feat: add ownership effects layout check product bar -Codex Autom
 - Unsupported parser constructs produce explicit diagnostics.
 - `./scripts/quality-gate.sh` passes.
 - `QUALITY_GATE_STRICT_CLEAN=1 ./scripts/quality-gate.sh` passes before merge.
-- Phase A review is APPROVED on disk.
+- Phase A honestly **APPROVED** (no unresolved findings).

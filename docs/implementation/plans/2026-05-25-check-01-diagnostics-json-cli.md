@@ -25,13 +25,13 @@ src/
 tests/
   check.rs               CLI and public check behavior
 docs/design/
-  diagnostic-codes.md    diagnostic code registry
+  diagnostic.rs          DiagnosticCode registry (parse/check codes)
 ```
 
 ## Real Parallel Work
 
 - Task 1 runs first and owns `src/diagnostic.rs`.
-- After Task 1, Task 2 (`src/source.rs`) and Task 3 (`docs/design/diagnostic-codes.md`, parser code mapping) may run in parallel.
+- After Task 1, Task 2 (`src/source.rs`) and Task 3 (`src/diagnostic.rs` + parser code mapping) may run in parallel.
 - Task 4 depends on Tasks 1-3 and owns `src/check/*`, `src/command.rs`, `src/lib.rs`, and `tests/check.rs`.
 - Task 5 runs last and verifies the full product shell.
 
@@ -775,26 +775,15 @@ Expected result: both tests pass.
 ### Task 3: Diagnostic Code Registry And Parser Codes
 
 **Files:**
-- Create: `docs/design/diagnostic-codes.md`
 - Modify: `src/syntax/parse.rs`
 - Modify: `src/syntax/syntax_kind.rs`
 - Modify: `src/diagnostic.rs`
 
-**Description:** Make diagnostic code ownership explicit and ensure parser diagnostics use parse-phase codes, including `W-PARSE-EXPECTED-TYPE`.
+**Description:** Make diagnostic code ownership explicit in `DiagnosticCode` and ensure parser diagnostics use parse-phase codes, including `W-PARSE-EXPECTED-TYPE`.
 
-- [ ] **Step 1: Write the diagnostic code registry**
+- [ ] **Step 1: Add the diagnostic code registry to `src/diagnostic.rs`**
 
-Create `docs/design/diagnostic-codes.md`:
-
-```markdown
-# Diagnostic Code Registry
-
-Date: 2026-05-25
-
-This registry owns Wrela diagnostic code strings. Codes are stable once released.
-Retired codes remain listed with status `retired` and must not be reused.
-
-## Format
+Implement `DiagnosticCode` with stable code strings. Registry spec:
 
 Codes use `W-<PHASE>-<NAME>`.
 
@@ -851,7 +840,6 @@ Phases:
 When a code is replaced, move it to this section with the release date and replacement.
 
 No codes are retired yet.
-```
 
 - [ ] **Step 2: Write failing parser code test**
 
@@ -1599,14 +1587,14 @@ Expected result: tests pass.
 
 Expected result: all checks pass.
 
-- [ ] **Step 2: Update implementation README status**
+- [ ] **Step 2: Update agent docs**
 
-If this plan is being landed independently, update `docs/implementation/README.md` so the check row notes that the diagnostic/CLI shell is complete and semantic phases remain in progress.
+If this plan is being landed independently, add `wrela check` notes to [`AGENTS.md`](../../AGENTS.md).
 
 - [ ] **Step 3: Commit**
 
 ```bash
-git add src/diagnostic.rs src/source.rs src/syntax/parse.rs src/syntax/syntax_kind.rs src/check src/command.rs src/lib.rs tests/check.rs docs/design/diagnostic-codes.md docs/implementation/README.md
+git add src/diagnostic.rs src/source.rs src/syntax/parse.rs src/syntax/syntax_kind.rs src/check src/command.rs src/lib.rs tests/check.rs AGENTS.md
 git commit -m "feat: add check diagnostics shell -Codex Automated"
 ```
 

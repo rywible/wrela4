@@ -701,8 +701,8 @@ duplicating semantic validation.
 
 ## Decisions To Lock If Accepted
 
-If this proposal is accepted, update `docs/design/locked-decisions.md` during
-the implementation plan:
+If this proposal is accepted, document these in [`AGENTS.md`](../AGENTS.md) and
+relevant ADRs under `docs/design/` during the implementation plan:
 
 - `wrela check <root.wrela>` is the first full semantic gate for the
   parser-supported language subset.
@@ -731,4 +731,3 @@ the implementation plan:
 - [`docs/design/0001-rust-command-center-and-zero-dependency-nucleus.md`](0001-rust-command-center-and-zero-dependency-nucleus.md)
 - [`docs/design/2026-05-22-parser-design-proposal.md`](2026-05-22-parser-design-proposal.md)
 - [`docs/design/2026-05-22-wrela-language-and-test-design.md`](2026-05-22-wrela-language-and-test-design.md)
-- [`docs/design/compiler-pipeline.md`](compiler-pipeline.md)

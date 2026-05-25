@@ -13,7 +13,7 @@
 
 ## Locked Decisions
 
-<!-- Rules agents must not violate. Mirror additions in docs/design/locked-decisions.md -->
+<!-- Rules agents must not violate. Mirror additions in AGENTS.md and docs/design/ ADRs -->
 
 - {{DECISION_1}}
 - {{DECISION_2}}
@@ -96,8 +96,7 @@ QUALITY_GATE_STRICT_CLEAN=1 ./scripts/quality-gate.sh
 **Acceptance criteria:**
 - All tasks complete
 - Quality gate passes
-- Phase A review APPROVED with no undocumented skipped items; all user feedback addressed
-- Interim review artifacts deleted before merge
+- Phase A self review honestly **APPROVED** (no unresolved findings) before user handoff
 
 ## Self-Review Checklist
 

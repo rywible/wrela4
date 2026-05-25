@@ -65,7 +65,7 @@ QUALITY_GATE_STRICT_CLEAN=1 ./scripts/quality-gate.sh
 
 ## Review Workflow
 
-Phase A is the required thermo-nuclear self-review before user handoff. The orchestrator runs the repository review workflow described in `docs/implementation/reviews/README.md`, records an APPROVED verdict on disk, and fixes every finding at every priority unless the verdict documents an explicit technical disagreement.
+Phase A is the required adversarial self-review before user handoff. Fix every finding; hand off only when the review honestly reports **`Verdict: APPROVED`** (see `docs/implementation/reviews/README.md`). Document explicit disagreements with rationale when skipping an item.
 
 After user feedback, the orchestrator fixes every suggestion at every severity, including maintenance smells and comments labeled optional, deferred, or non-blocking, unless the final verdict documents an explicit technical disagreement.
 
@@ -79,7 +79,7 @@ The four child plans are subplans under this one parent delivery. Run Phase A on
 - Human rendering stays available through `--human`.
 - Only `command.rs` writes user-facing output.
 - Compiler phases return diagnostics as data.
-- Diagnostic codes are owned by `docs/design/diagnostic-codes.md`.
+- Diagnostic codes are owned by `DiagnosticCode` in `src/diagnostic.rs`.
 - Every diagnostic with a source location has a primary span.
 - Secondary spans, related locations, notes, help, and suggested fixes are structured data.
 - Suggested fixes carry applicability and source-hash preconditions.
@@ -115,7 +115,7 @@ flowchart TD
 - Suggested fixes include exact source edits, applicability, source hashes, and disjoint-span validation.
 - `./scripts/quality-gate.sh` passes after every child plan.
 - `QUALITY_GATE_STRICT_CLEAN=1 ./scripts/quality-gate.sh` passes before merge.
-- Phase A review is APPROVED on disk before user handoff.
+- Phase A honestly **APPROVED** (no unresolved findings) before user handoff.
 
 ## Execution Notes
 

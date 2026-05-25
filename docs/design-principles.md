@@ -9,8 +9,8 @@ the subfolders below.
 
 | Path | Contents |
 |------|----------|
-| [`design/`](design/) | Language spec, ADRs, architecture, locked decisions, supported syntax subset |
-| [`implementation/`](implementation/) | Implementation plans, roadmap, plan-review harness |
+| [`design/`](design/) | ADRs and design proposals |
+| [`implementation/`](implementation/) | Implementation plans and review workflow |
 
 Agent onboarding: [`../AGENTS.md`](../AGENTS.md).
 
@@ -55,22 +55,17 @@ project, not a wrapper around a separate service.
   documented order.
 
 See [`design/0001-rust-command-center-and-zero-dependency-nucleus.md`](design/0001-rust-command-center-and-zero-dependency-nucleus.md)
-for the accepted toolchain decision.
-
-Locked rules for agents: [`design/locked-decisions.md`](design/locked-decisions.md).
-
-Pipeline overview: [`design/compiler-pipeline.md`](design/compiler-pipeline.md).
+for the accepted toolchain decision. Agent rules: [`../AGENTS.md`](../AGENTS.md).
 
 ## Implementation workflow
 
 Implementation plans live under [`implementation/plans/`](implementation/plans/).
-See [`implementation/README.md`](implementation/README.md) for status and workflow.
+Review workflow: [`implementation/reviews/README.md`](implementation/reviews/README.md).
 
-Each plan is executed on a feature branch from `main`, passes thermo-nuclear self review
-(Phase A), receives user feedback, then merges to `main` after interim review artifacts
-are deleted.
+Each plan is executed on a feature branch from `main`, passes an adversarial self review
+(Phase A), receives user feedback, then merges to `main`.
 
 There is **no CI** — `./scripts/quality-gate.sh` is the verifier.
 
 See [`implementation/reviews/README.md`](implementation/reviews/README.md) for
-the review gate and cleanup steps.
+the review gate.
