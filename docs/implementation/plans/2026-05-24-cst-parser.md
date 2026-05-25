@@ -84,6 +84,8 @@ expected as in scan expression
 expected until in scan expression
 unexpected token in class body
 unexpected token in statement
+unexpected token
+expression too deep
 ```
 
 ## Planned File Structure

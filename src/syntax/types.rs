@@ -1,7 +1,7 @@
 use crate::lexer::{Keyword, Punct, TokenKind};
 
 use super::parse::Parser;
-use super::syntax_kind::SyntaxKind;
+use super::syntax_kind::{SyntaxErrorKind, SyntaxKind};
 
 impl<'a> Parser<'a> {
     pub(crate) fn parse_type_ref(&mut self) {
@@ -15,7 +15,8 @@ impl<'a> Parser<'a> {
         ) {
             self.bump();
         }
-        if self.expect_identifier() {
+        if self.peek().kind() == TokenKind::Identifier {
+            self.bump();
             while self.eat_punct(Punct::Dot) {
                 self.expect_identifier();
             }
@@ -33,6 +34,8 @@ impl<'a> Parser<'a> {
                 self.finish_node();
                 self.expect_close_punct(Punct::CloseBracket, "expected ']'");
             }
+        } else {
+            self.error_at_current(SyntaxErrorKind::ExpectedType, "expected type");
         }
         self.finish_node();
     }
@@ -91,5 +94,16 @@ mod tests {
     fn parses_access_qualified_type() {
         let parsed = parse_type_text("unique MacOSHost");
         assert!(!has_errors(parsed.diagnostics()));
+    }
+
+    #[test]
+    fn missing_type_name_emits_expected_type() {
+        let parsed = parse_type_text("=");
+        assert!(
+            parsed
+                .diagnostics()
+                .iter()
+                .any(|diagnostic| { diagnostic.message() == "expected type" })
+        );
     }
 }

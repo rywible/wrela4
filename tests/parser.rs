@@ -284,11 +284,28 @@ fn image_body_recovery_preserves_following_top_level_item() {
 
 #[test]
 fn reduce_and_scan_accept_full_expression_operands() {
-    let parsed = parse_fixture("assertions-reduce-scan.wrela");
+    let parsed = parse_text(
+        "class C { fn m() { \
+            let total = reduce a + b as row, acc: U64 = 0 { return acc + row } \
+            let found = scan a + b as i until i == 0 { return found } \
+            return total \
+        } }",
+    );
     assert!(!has_errors(parsed.diagnostics()));
     assert!(tree_contains(parsed.tree(), SyntaxKind::ReduceExpr));
     assert!(tree_contains(parsed.tree(), SyntaxKind::ScanExpr));
     assert!(tree_contains(parsed.tree(), SyntaxKind::BinaryExpr));
+}
+
+#[test]
+fn missing_type_after_colon_emits_expected_type() {
+    let parsed = parse_text("class C { fn m() { let x: = 1 } }");
+    assert!(
+        parsed
+            .diagnostics()
+            .iter()
+            .any(|diagnostic| { diagnostic.message() == "expected type" })
+    );
 }
 
 #[test]
