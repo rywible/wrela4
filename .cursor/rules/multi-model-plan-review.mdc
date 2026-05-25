@@ -1,5 +1,5 @@
 ---
-description: Require thermo-nuclear self-review then Claude + Codex external review before marking implementation plans complete
+description: Require thermo-nuclear self-review before handing plan work to the user; merge after user feedback
 alwaysApply: true
 ---
 
@@ -8,11 +8,21 @@ alwaysApply: true
 When executing a plan from `docs/implementation/plans/`:
 
 1. Read [`AGENTS.md`](../../AGENTS.md) and `.cursor/skills/multi-model-plan-review/SKILL.md`
-2. **Phase A and Phase B must be separate assistant turns** on first pass (do not start Phase B in the same message as writing Phase A)
+2. Work on a **feature branch** in the main repo (not a worktree): `git checkout -b feat/<name>` from `main`
 3. Phase A: thermo-nuclear self review → write `*-review-self-thermonuclear.md` with `## Verdict: APPROVED`
-4. Phase B: `plan-review-check-phase-a.sh` → `plan-review.sh` (Claude + Codex in parallel)
-5. **Autonomous loops:** after any fix from Phase A or Phase B feedback, loop autonomously — fix → commit → re-run Phase A → re-run Phase B — until both phases pass. Do not ask the user to re-run or commit.
-6. Do not return until Phase A is APPROVED **and** Claude **and** Codex are both APPROVED
-7. **Phase C:** delete interim review artifacts from worktree → merge into main → remove worktree
+4. Verify: `./scripts/plan-review-check-phase-a.sh . docs/implementation/plans/<plan>.md`
+5. **Return to the user** for feedback — do **not** run `plan-review.sh` (Phase B) autonomously
+6. After user feedback: fix **every suggestion (all severities, including low priority)** → quality gate → re-run Phase A if code changed → merge when user directs
+7. **Phase C:** delete interim review artifacts → merge into `main` → delete feature branch
 
-**Forbidden:** running `plan-review.sh` in the same turn as the initial Phase A write; stopping after a review-driven fix without looping to pass; re-running only one Phase B reviewer after fixes; committing interim review artifacts to `main`.
+## Fix-everything policy (Phase A and user feedback)
+
+Implement **all** findings and **all** feedback items — every priority, severity, and label (P0–P2+, Critical/Major/Minor, maintenance smell, low priority, nice-to-have, deferred, 🟡/🟢). **Do not defer** because something looks optional.
+
+**Only exception:** you **explicitly disagree** with a specific item and document why (Phase A verdict: **Explicit disagreements** section). Undocumented skips are forbidden.
+
+**Forbidden:** APPROVED verdicts with “Deferred” / “non-blocking” lists without documented disagreement per item; merging while any non-disagreed feedback remains open.
+
+See `.cursor/skills/multi-model-plan-review/SKILL.md` for full rules.
+
+**Forbidden:** using a worktree for plan implementation by default; running `plan-review.sh` as part of the orchestrator gate; committing interim review artifacts to `main`.

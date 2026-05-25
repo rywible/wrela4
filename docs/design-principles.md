@@ -66,9 +66,9 @@ Pipeline overview: [`design/compiler-pipeline.md`](design/compiler-pipeline.md).
 Implementation plans live under [`implementation/plans/`](implementation/plans/).
 See [`implementation/README.md`](implementation/README.md) for status and workflow.
 
-Each plan is executed in an isolated worktree, passes thermo-nuclear self review
-(Phase A) and independent Claude + Codex review (Phase B), then merges to
-`main` after interim review artifacts are deleted.
+Each plan is executed on a feature branch from `main`, passes thermo-nuclear self review
+(Phase A), receives user feedback, then merges to `main` after interim review artifacts
+are deleted.
 
 There is **no CI** — `./scripts/quality-gate.sh` is the verifier.
 

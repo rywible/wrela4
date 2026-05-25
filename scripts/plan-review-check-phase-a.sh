@@ -5,14 +5,13 @@ set -euo pipefail
 
 usage() {
   cat <<'EOF'
-Usage: scripts/plan-review-check-phase-a.sh <worktree-dir> <plan-path>
+Usage: scripts/plan-review-check-phase-a.sh <repo-root> <plan-path>
 
 Checks that Phase A self review verdict file exists and is APPROVED.
-Run this (or rely on plan-review.sh's built-in gate) before starting Phase B.
 
-Example:
+Example (on feature branch in main repo):
   ./scripts/plan-review-check-phase-a.sh \
-    .worktrees/feat-branch \
+    . \
     docs/implementation/plans/2026-05-22-feature.md
 EOF
 }

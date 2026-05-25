@@ -9,7 +9,7 @@ Usage: scripts/plan-review.sh <plan-path> [worktree-dir] [base-sha]
 
 Arguments:
   plan-path      Path to the implementation plan markdown file
-  worktree-dir   Git worktree root (default: current directory)
+  worktree-dir   Repo root (default: current directory; use `.` on feature branch)
   base-sha       Start commit for diff (default: merge-base with main)
 
 Environment:

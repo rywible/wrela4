@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Create an isolated git worktree for plan implementation.
+# Optional: create an isolated git worktree for plan implementation.
+# Default workflow is a feature branch in the main repo (git checkout -b feat/<name>).
 # Usage: scripts/plan-worktree-new.sh <branch-name> [base-ref]
 set -euo pipefail
 

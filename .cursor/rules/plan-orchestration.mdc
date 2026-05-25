@@ -1,5 +1,5 @@
 ---
-description: Orchestrator duties for plan execution — worktrees, subagents, full completion, production quality
+description: Orchestrator duties for plan execution — branches, subagents, full completion, production quality
 alwaysApply: true
 ---
 
@@ -7,10 +7,18 @@ alwaysApply: true
 
 You are the **orchestrator**. You are accountable for the full plan AC and the quality of shipped code.
 
-## Worktree discipline
+## Branch discipline
 
-- Execute implementation plans in an **isolated git worktree** (`./scripts/plan-worktree-new.sh feat/<name>`).
-- Do not implement plan work directly on `main`.
+- Execute implementation plans on a **feature branch** in the main repo checkout — not on `main`, and **not** in a separate git worktree.
+- Create the branch from current `main`:
+
+  ```bash
+  git checkout main
+  git checkout -b feat/<name>
+  ```
+
+- Do all plan work on that branch in the same workspace the user has open.
+- Do not use `./scripts/plan-worktree-new.sh` unless the user explicitly asks for a worktree.
 
 ## Subagent execution
 
@@ -50,28 +58,57 @@ When launching subagents, include explicitly: **"Do not run cargo, quality-gate,
 
 ## Completion gate
 
-- **Do not return to the user until the full plan is complete.** Partial progress is not done.
-- **Do not stop after implementation commits.** Implementation is only half the job.
-- All tasks done → quality gate passing → **Phase A APPROVED on disk** → **Phase B APPROVED (Claude and Codex)** → Phase C cleanup → **merge to `main`** → remove worktree.
-- If Phase A or Phase B rejects, **loop autonomously**: fix → quality gate → re-run Phase A → re-run Phase B — until both pass. Never ask the user to re-run reviews or merge.
-- If a subagent fails or skips AC, you fix it — do not report partial progress as done.
+### Handoff to user (after implementation)
+
+- All tasks done → quality gate passing → **Phase A APPROVED on disk** → **return to user for feedback**
+- **Do not run Phase B** (`plan-review.sh`, Claude/Codex CLI) as part of the orchestrator gate
+- **Do not merge** until the user has reviewed and you have worked through their feedback
+
+### After user feedback
+
+- Fix feedback → quality gate → re-run Phase A if code changed
+- When user directs merge: Phase C cleanup → merge feature branch into `main` → delete feature branch
+
+### Phase A fix policy
+
+Implement **every** Phase A finding at **every** priority (P0, P1, P2, …) and **every** severity label (Critical, Major, Minor, maintenance smell, etc.) before writing `## Verdict: APPROVED` — unless you **explicitly disagree** with a specific item and document why in that verdict.
+
+### User feedback fix policy (same rule)
+
+When the user (or any reviewer) provides feedback, implement **every listed suggestion** — including items marked low priority, deferred, non-blocking, nice-to-have, or 🟡/🟢 — before returning or merging. **Do not defer** because something looks optional.
+
+**Only exception:** you **explicitly disagree** with a specific suggestion and state why in the next Phase A verdict (or in the handoff message if no code changed). Disagreement without documentation counts as a skipped item.
+
+**Forbidden:**
+
+- Sections like “Deferred”, “Remaining (non-blocking)”, or “low-priority hardening” in an APPROVED verdict without a matching **Explicit disagreements** entry for each skipped item
+- Treating “low priority” / “maintenance smell” / “nice-to-have” as optional by default
+- Handing off or merging while any agreed-upon feedback item is still open
+
+If a subagent fails or skips AC, you fix it — do not report partial progress as done.
 
 ## Review gate (orchestrator-owned)
 
 The orchestrator runs every review script and verification command. Subagents never run `plan-review*.sh`.
 
+Run from the **repo root** on the feature branch (review scripts accept `.` as the repo path):
+
 ```text
 QUALITY_GATE_STRICT_CLEAN=1 ./scripts/quality-gate.sh
-./scripts/plan-review-save-verification.sh docs/implementation/plans/<plan>.md <worktree>
-# Phase A: write *-review-self-thermonuclear.md with ## Verdict: APPROVED
-./scripts/plan-review-check-phase-a.sh <worktree> docs/implementation/plans/<plan>.md
-./scripts/plan-review.sh docs/implementation/plans/<plan>.md <worktree> <base-sha>
-# Phase C: plan-review-cleanup.sh → merge feat branch to main → remove worktree
+./scripts/plan-review-save-verification.sh docs/implementation/plans/<plan>.md .
+# Phase A: write docs/implementation/reviews/<slug>-review-self-thermonuclear.md with ## Verdict: APPROVED
+./scripts/plan-review-check-phase-a.sh . docs/implementation/plans/<plan>.md
+# → return to user for feedback
+# after feedback + user says merge:
+./scripts/plan-review-cleanup.sh . docs/implementation/plans/<plan>.md
+git checkout main && git merge feat/<name>
+QUALITY_GATE_STRICT_CLEAN=1 ./scripts/quality-gate.sh
+git branch -d feat/<name>
 ```
 
-**Forbidden:** returning after Task N commits without completing Phase A + Phase B + merge; stopping mid-review-loop to ask the user what to do next.
+**Forbidden:** returning before Phase A APPROVED; running `plan-review.sh` autonomously; merging before **all** user feedback is addressed (including low-priority items); deferring review suggestions without documented explicit disagreement; creating a worktree for plan work by default.
 
 ## Accountability
 
-- You own end-to-end delivery: orchestration, conflict resolution, re-verification after merges, review loops, and final merge.
+- You own end-to-end delivery: orchestration, conflict resolution, re-verification after merges, Phase A loops, and final merge **after user approval**.
 - Subagent output is not done until **you** have verified it against the plan AC and locked decisions (`docs/design/locked-decisions.md`).

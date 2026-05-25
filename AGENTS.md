@@ -36,7 +36,7 @@ docs/
   design-principles.md
   design/          language spec, ADRs, architecture, supported syntax subset
   implementation/  plans, review harness, roadmap
-scripts/           quality gate, plan worktree, plan review
+scripts/           quality gate, plan review
 ```
 
 See [`docs/design/compiler-pipeline.md`](docs/design/compiler-pipeline.md) for
@@ -75,20 +75,26 @@ QUALITY_GATE_STRICT_CLEAN=1 ./scripts/quality-gate.sh
 You are the **orchestrator** — accountable for full plan AC and production quality.
 See [`.cursor/rules/plan-orchestration.mdc`](.cursor/rules/plan-orchestration.mdc).
 
-1. Create an isolated worktree:
+1. Create a feature branch from `main` (same repo checkout — **not** a worktree):
 
    ```bash
-   ./scripts/plan-worktree-new.sh feat/my-feature
+   git checkout main
+   git checkout -b feat/my-feature
    ```
 
-2. Execute the plan in that worktree task-by-task.
-3. Run `./scripts/quality-gate.sh` after each task and before review.
-4. Complete the review gate (Phase A → Phase B → Phase C cleanup):
+2. Execute the plan on that branch task-by-task.
+3. **Subagents edit code only** — they must not run `cargo`, `./scripts/quality-gate.sh`, or Wrela CLI commands. The orchestrator runs all build/test verification sequentially after each subagent returns.
+4. Run `./scripts/quality-gate.sh` after each task and before review.
+5. Complete **Phase A** (thermo-nuclear self review) before returning for **user feedback** — fix **every** Phase A finding at every priority/severity unless you explicitly disagree and document why in the verdict.
+
+6. After user feedback: fix **every suggestion** (including low priority, maintenance smells, and items labeled deferred/non-blocking) unless explicitly disagreed and documented → quality gate → re-run Phase A if code changed.
+
+7. When the user directs merge: Phase C cleanup → merge feature branch into `main` → delete the feature branch.
+
+**Do not stop after implementation commits** without Phase A APPROVED on disk. **Do not merge** until all non-disagreed feedback is resolved. **Do not defer** review items because of priority labels. The orchestrator does **not** run automated Phase B (`plan-review.sh`).
 
    See [`.cursor/skills/multi-model-plan-review/SKILL.md`](.cursor/skills/multi-model-plan-review/SKILL.md)
    and [`docs/implementation/reviews/README.md`](docs/implementation/reviews/README.md).
-
-5. Merge to `main`, delete interim review artifacts, remove the worktree.
 
 New plans: copy [`docs/implementation/plans/plan-template.md`](docs/implementation/plans/plan-template.md).
 

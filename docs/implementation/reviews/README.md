@@ -1,95 +1,90 @@
 # Plan completion reviews
 
-Two-phase gate: thermo-nuclear self review, then Claude Code + Codex.
+**Orchestrator gate:** thermo-nuclear self review (Phase A) → user feedback → merge (Phase C).
 
-## Strict sequencing
+Work happens on a **feature branch** in the main repo checkout — not in a separate git worktree.
+
+Automated external review via Claude Code + Codex (`plan-review.sh`) is **optional** and not part of the agent completion gate.
+
+## Strict sequencing (orchestrator)
 
 ```text
-Turn 1  Phase A only  → write *-review-self-thermonuclear.md → stop
-Turn 2  Verify Phase A → plan-review-check-phase-a.sh must pass
-Turn 3+ Phase B only  → plan-review.sh (Claude + Codex in parallel)
+git checkout main && git checkout -b feat/<name>
+Implement plan tasks → quality gate
+Phase A  → write *-review-self-thermonuclear.md → APPROVED → return to user
+User     → feedback in chat
+Fix loop → quality gate → re-run Phase A if code changed
+Phase C  → cleanup artifacts → merge to main → delete branch (when user directs)
 ```
 
 ## Gate
 
-### Phase A — Self review (loop)
+### Phase A — Self review (loop until handoff)
 
 1. `thermo-nuclear-code-quality-review` skill
-2. Write `*-review-self-thermonuclear.md` with `## Verdict: APPROVED`
+2. Write `docs/implementation/reviews/<slug>-review-self-thermonuclear.md` with `## Verdict: APPROVED`
 3. Optional: `*-plan-amendment.md` if code-judo changes plan assumptions
-4. **End turn**
+4. `./scripts/plan-review-check-phase-a.sh . docs/implementation/plans/PLAN.md` must pass
+5. **Return to user** for feedback
 
-### Phase B — External reviews (loop)
+### User feedback (replaces automated Phase B)
 
-1. `*-review-claude.md` → **APPROVED**
-2. `*-review-codex.md` → **APPROVED**
+The user reviews the feature branch and provides feedback. Implement **every suggestion** — all severities, including low priority, maintenance smells, nice-to-have, and items labeled deferred or non-blocking.
 
-## Autonomous loops (required)
+**Only exception:** explicit disagreement documented in the next Phase A verdict (**Explicit disagreements** section: item + rationale).
 
-After **any** fix from Phase A or Phase B feedback, the orchestrator loops autonomously until the gate passes. Do not return to the user mid-loop.
+Re-run Phase A after code changes. Do not hand off or merge with open non-disagreed items.
 
-```text
-Phase A fix  → ./scripts/quality-gate.sh → re-write self verdict → repeat until APPROVED
-Phase B fix  → commit → Phase A loop → Phase B loop → repeat until Claude AND Codex APPROVED
-```
+### Fix-everything policy (Phase A + feedback)
 
-| Trigger | Action |
-|---------|--------|
-| Phase A REJECTED | Fix → `./scripts/quality-gate.sh` → re-write verdict → loop |
-| Either Phase B REJECTED | Fix all required items → commit → Phase A loop → re-run **both** Claude and Codex |
-| Gate passed | Phase A APPROVED + Claude APPROVED + Codex APPROVED |
+| Source | Rule |
+|--------|------|
+| Phase A self-review | Fix every finding in every section before `## Verdict: APPROVED` |
+| User / reviewer feedback | Fix every listed suggestion before next handoff or merge |
+| Exception | Explicit disagreement only — must be documented |
 
-## Phase C — Cleanup and merge
+**Forbidden:** deferring because of priority labels; “Deferred” / “non-blocking” sections in APPROVED verdicts without per-item documented disagreement.
 
-After both Phase B reviewers APPROVED:
+### Phase C — Cleanup and merge
 
-1. **Delete interim artifacts** from the worktree (not templates):
-   - `<slug>-review-*.md`, `<slug>-plan-amendment.md`, `<slug>-verification.log`
-2. **Merge** the feature branch into `main`
-3. **Remove** the worktree and delete the merged branch
+After user feedback is resolved and the user asks to merge:
 
 ```bash
-./scripts/plan-review-cleanup.sh .worktrees/feat-branch docs/implementation/plans/PLAN.md
+./scripts/plan-review-cleanup.sh . docs/implementation/plans/PLAN.md
 git checkout main && git merge feat/branch --no-ff
-git worktree remove .worktrees/feat-branch
+./scripts/quality-gate.sh
 git branch -d feat/branch
 ```
 
 Interim review outputs are ephemeral — only templates and this README belong on `main`.
 
-| Artifact | Reviewer |
-|----------|----------|
+| Artifact | Who |
+|----------|-----|
 | `<slug>-review-self-thermonuclear.md` | Orchestrator (Phase A) |
 | `<slug>-plan-amendment.md` | Orchestrator (optional) |
-| `<slug>-review-packet.md` | Shared input |
-| `<slug>-review-claude.md` | Claude Code (Opus, max) |
-| `<slug>-review-codex.md` | Codex CLI (GPT 5.5, xhigh) |
+| `<slug>-verification.log` | Orchestrator (optional) |
+| `<slug>-review-claude.md`, `<slug>-review-codex.md` | Optional manual CLI only |
 
 ## Quick start
 
 ```bash
-# Turn 1: Phase A (orchestrator) — write self review + optional amendment
-
-# Turn 2: Verify
-./scripts/plan-review-check-phase-a.sh .worktrees/feat-branch docs/implementation/plans/PLAN.md
-
-# Turn 3+: Phase B
-./scripts/plan-review-save-verification.sh docs/implementation/plans/PLAN.md .worktrees/feat-branch
-./scripts/plan-review.sh docs/implementation/plans/PLAN.md .worktrees/feat-branch
+git checkout main && git checkout -b feat/my-feature
+./scripts/quality-gate.sh
+./scripts/plan-review-save-verification.sh docs/implementation/plans/PLAN.md .
+# Phase A: write self review
+./scripts/plan-review-check-phase-a.sh . docs/implementation/plans/PLAN.md
+# → user feedback → fix → merge when directed
 ```
 
-## Configuration
+Review scripts accept the **repo root** as path — use `.` on the feature branch.
 
-| Variable | Default |
-|----------|---------|
-| `CLAUDE_REVIEW_MODEL` | `opus` |
-| `CLAUDE_REVIEW_EFFORT` | `max` |
-| `CODEX_REVIEW_MODEL` | `gpt-5.5` |
-| `CODEX_REVIEW_REASONING` | `xhigh` |
-| `PLAN_REVIEW_SKIP_CLAUDE` | `0` |
-| `PLAN_REVIEW_SKIP_CODEX` | `0` |
+## Optional: manual external review
 
-Smoke test: `./scripts/plan-review-smoke-test.sh`
+```bash
+./scripts/plan-review.sh docs/implementation/plans/PLAN.md .
+```
+
+Not required for orchestrator handoff or merge. See script env vars and `./scripts/plan-review-smoke-test.sh`.
 
 There is **no CI** — run `./scripts/quality-gate.sh` locally before merge.
 

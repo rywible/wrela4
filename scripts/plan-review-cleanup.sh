@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
-# Delete interim plan-review artifacts from a worktree before merge.
+# Delete interim plan-review artifacts from the repo before merge.
 # See .cursor/skills/multi-model-plan-review/SKILL.md § Phase C.
 set -euo pipefail
 
 usage() {
   cat <<'EOF'
-Usage: scripts/plan-review-cleanup.sh <worktree-dir> <plan-path>
+Usage: scripts/plan-review-cleanup.sh <repo-root> <plan-path>
 
 Removes ephemeral review outputs for the plan slug:
   *-review-self-thermonuclear.md

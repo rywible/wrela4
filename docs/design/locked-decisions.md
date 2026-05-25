@@ -75,8 +75,9 @@ Rules agents must not violate without an explicit new decision doc in
 
 | Decision | Detail |
 |----------|--------|
-| Plan execution | Isolated git worktree per plan |
-| Gate | Phase A (self) → Phase B (Claude + Codex) → Phase C (cleanup + merge) |
+| Plan execution | Feature branch from `main` in the main repo checkout (not a worktree) |
+| Gate | Phase A (self) → user feedback → Phase C (cleanup + merge) |
+| Feedback policy | Fix **all** suggestions at **all** severities; no deferral unless explicit disagreement is documented |
 | Interim review files | Ephemeral; delete before merge (see `plan-review-cleanup.sh`) |
 
 ## References

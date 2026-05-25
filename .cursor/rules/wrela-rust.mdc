@@ -47,5 +47,6 @@ There is no CI. Run `./scripts/quality-gate.sh` before claiming work complete.
 
 ## Plan work
 
-- Implement plans in an isolated worktree (`./scripts/plan-worktree-new.sh`).
-- Complete the multi-model review gate before merge; loop autonomously on review fixes.
+- Implement plans on a **feature branch** in the main repo (`git checkout -b feat/<name>` from `main`). Do not use a worktree by default.
+- Subagents must not run `cargo` or `./scripts/quality-gate.sh`; the orchestrator verifies sequentially (see `.cursor/rules/plan-orchestration.mdc`).
+- Complete Phase A before handoff; fix **every** Phase A and user-feedback item (all severities) unless explicitly disagreed and documented; merge after feedback is fully resolved (see multi-model review skill).

@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 # Save verification output before running plan-review.sh
-# Usage: scripts/plan-review-save-verification.sh <plan-path> <worktree-dir>
+# Usage: scripts/plan-review-save-verification.sh <plan-path> <repo-root>
 set -euo pipefail
 
 PLAN="${1:?plan path required}"
-WORKTREE="${2:?worktree path required}"
+WORKTREE="${2:?repo root required}"
 SCRIPT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 WORKTREE="$(cd "$WORKTREE" && pwd)"
 SLUG="$(basename "$PLAN" .md)"

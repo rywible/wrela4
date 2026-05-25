@@ -1,7 +1,7 @@
 # {{TITLE}} Implementation Plan
 
-> **For agentic workers:** Execute task-by-task in an isolated worktree. Run
-> `./scripts/quality-gate.sh` after each task. Complete the review gate before merge.
+> **For agentic workers:** Execute task-by-task on a feature branch (`git checkout -b feat/<name>` from `main`). Run
+> `./scripts/quality-gate.sh` after each task. Complete Phase A before handoff; merge after user feedback.
 
 **Goal:** {{ONE_SENTENCE_GOAL}}
 
@@ -38,8 +38,25 @@
 ## Subagent Git Discipline
 
 Parallel subagents must not commit directly to the same branch. Each subagent
-works in its own branch or worktree; the integration owner merges in dependency
+works in its own branch; the integration owner merges in dependency
 order and re-runs verification after conflicts.
+
+## Subagent Verification Discipline
+
+Subagents implement code and fixtures only. They **must not** run `cargo`,
+`./scripts/quality-gate.sh`, or Wrela CLI commands — parallel builds/tests can
+exhaust the host. The **orchestrator** runs focused tests and the quality gate
+sequentially after each subagent returns and before marking a task complete.
+
+## Review and feedback fix policy
+
+Phase A and user feedback share one rule: implement **every** finding and **every**
+suggestion at **every** priority and severity (including low priority, maintenance
+smells, nice-to-have, deferred, non-blocking). **Do not defer** because a reviewer
+labeled something optional.
+
+**Only exception:** orchestrator **explicit disagreement** documented in the Phase A
+verdict (**Explicit disagreements**: item + rationale).
 
 ---
 
@@ -77,12 +94,12 @@ QUALITY_GATE_STRICT_CLEAN=1 ./scripts/quality-gate.sh
 **Acceptance criteria:**
 - All tasks complete
 - Quality gate passes
-- Phase A + Phase B review APPROVED
-- Interim review artifacts deleted; worktree removed after merge
+- Phase A review APPROVED with no undocumented skipped items; all user feedback addressed
+- Interim review artifacts deleted before merge
 
 ## Self-Review Checklist
 
-<!-- Copy items agents must verify before Phase B -->
+<!-- Copy items agents must verify before Phase A handoff -->
 
 - {{CHECKLIST_ITEM}}
 

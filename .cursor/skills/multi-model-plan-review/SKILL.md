@@ -1,211 +1,144 @@
 ---
 name: multi-model-plan-review
-description: Run thermo-nuclear self-review then independent plan reviews via Claude Code (Opus max) and Codex (GPT 5.5 xhigh) before marking implementation plans complete. Use when implementing plans from docs/implementation/plans/, when the user asks for multi-model review, or before returning from plan execution.
+description: Run thermo-nuclear self-review before returning from plan implementation; user provides feedback; then merge and cleanup. Use when implementing plans from docs/implementation/plans/.
 ---
 
-# Multi-Model Plan Review
+# Plan Review (Phase A + user feedback)
 
-Two-phase gate before claiming any implementation plan is complete:
+Gate before handing a plan implementation back to the user:
 
-1. **Phase A — Self review:** thermo-nuclear code quality review (loop until PASS)
-2. **Phase B — External review:** Claude Code + Codex in parallel (loop until both APPROVED)
+1. **Phase A — Self review:** thermo-nuclear code quality review (loop until APPROVED on disk)
+2. **User feedback:** the user reviews the work and provides feedback in chat
+3. **Post-feedback:** address feedback → quality gate → re-run Phase A if code changed → **Phase C** cleanup and merge
+
+**The orchestrator does not run Phase B** (`plan-review.sh`, Claude Code CLI, or Codex CLI). Those scripts remain available for optional manual use but are not part of the agent completion gate.
 
 ---
 
-## Strict sequencing (NON-NEGOTIABLE)
+## Branch setup (not worktree)
 
-**Phase A and Phase B are separate turns. Never combine them.**
-
-```text
-Turn N   → Phase A only (read skill, audit diff, write verdict file)
-Turn N+1 → Verify Phase A file on disk (see checklist below)
-Turn N+2 → Phase B only (plan-review.sh — Claude + Codex)
-```
-
-### What Phase A means
-
-- **Who:** the orchestrator (you), using `thermo-nuclear-code-quality-review`
-- **Output:** a file on disk: `<worktree>/docs/implementation/reviews/<slug>-review-self-thermonuclear.md`
-- **Done when:** that file contains a line exactly matching `## Verdict: APPROVED`
-
-### What Phase B means
-
-- **Who:** Claude Code CLI + Codex CLI via `plan-review.sh`
-- **When:** only after Phase A verification passes
-- **Parallel inside Phase B:** Claude and Codex run together in `plan-review.sh` — **never** in the same turn as Phase A
-
-### Forbidden
-
-| Do NOT | Why |
-|--------|-----|
-| Run `plan-review.sh` in the same turn you write the Phase A verdict | Externals start before Phase A is on disk |
-| Batch Phase A + Phase B in one assistant message | Same |
-| Assume Phase A is done from chat draft | Verdict must be **written to the file** |
-| Skip `plan-review-check-phase-a.sh` before Phase B | Confirms APPROVED on disk |
-| Use `PLAN_REVIEW_SKIP_SELF_GATE=1` except emergencies | Bypasses the gate |
-
-### Required before starting Phase B
+Implement on a **feature branch** in the main repo checkout:
 
 ```bash
-./scripts/plan-review-check-phase-a.sh "$WORKTREE" docs/implementation/plans/<plan>.md
+git checkout main
+git checkout -b feat/<name>
 ```
 
----
-
-## Gate (hard stop)
-
-### Phase A — Thermo-nuclear self review
-
-1. Read `thermo-nuclear-code-quality-review` skill
-2. Review worktree diff (`BASE_SHA..HEAD`)
-3. **Write** `*-review-self-thermonuclear.md`
-4. **Stop turn.** Do not start Phase B in the same message.
-5. Loop until **APPROVED**
-
-### Phase B — Claude + Codex
-
-**Start in a subsequent turn** after Phase A checklist passes.
-
-1. Save verification log (`plan-review-save-verification.sh`)
-2. Run `plan-review.sh` (Claude + Codex in parallel)
-3. Both `*-review-claude.md` and `*-review-codex.md` → **APPROVED**
+Stay in the same workspace. Do **not** use `./scripts/plan-worktree-new.sh` unless the user explicitly requests a worktree.
 
 ---
 
-## Autonomous review loops (NON-NEGOTIABLE)
+## Completion gate (orchestrator)
 
-**Never return to the user or claim the plan is complete while a phase gate is failing.**
+**Stop and return to the user when:**
 
-After **any** fix driven by Phase A or Phase B feedback, the orchestrator must **autonomously loop** until the gate passes. Do not ask the user to re-run reviews or commit fixes — do it yourself.
+- All plan tasks implemented on the feature branch
+- `./scripts/quality-gate.sh` passes
+- Phase A verdict on disk: `## Verdict: APPROVED`
+- `./scripts/plan-review-check-phase-a.sh . docs/implementation/plans/<plan>.md` passes
 
-### Phase A loop
+**Do not merge** until the user has reviewed and you have worked through their feedback.
+
+Review scripts take the **repo root** as their path argument — use `.` when already on the feature branch.
+
+---
+
+## Phase A — Thermo-nuclear self review
+
+See skill file at `~/.cursor/plugins/cache/cursor-public/cursor-team-kit/*/skills/thermo-nuclear-code-quality-review/SKILL.md`.
+
+### Steps
+
+1. Review branch diff (`BASE_SHA..HEAD`)
+2. Save verification log (optional but recommended):
+
+   ```bash
+   ./scripts/plan-review-save-verification.sh docs/implementation/plans/<plan>.md .
+   ```
+
+3. **Write** `docs/implementation/reviews/<slug>-review-self-thermonuclear.md`
+4. Verify:
+
+   ```bash
+   ./scripts/plan-review-check-phase-a.sh . docs/implementation/plans/<plan>.md
+   ```
+
+5. **Return to the user** for feedback
+
+### Phase A loop (before first handoff)
 
 ```text
 fix required items
-  → run ./scripts/quality-gate.sh
+  → ./scripts/quality-gate.sh
   → re-run thermo-nuclear self review
   → write/update *-review-self-thermonuclear.md
   → repeat until ## Verdict: APPROVED
 ```
 
-Stop only when Phase A verdict file contains `## Verdict: APPROVED`.
+### Phase A fix policy
 
-### Phase B loop
+When Phase A lists findings under **Required fixes**, **Missed simplification**, **Spaghetti**, **File-size**, or any other section, implement **every item at every priority and severity** before writing `## Verdict: APPROVED` — unless you **explicitly disagree** and document why in the verdict under **Explicit disagreements**.
+
+**Forbidden:** silently skipping P2+ or “optional” items; APPROVED verdicts with “Deferred” / “non-blocking” lists unless each skipped item has a documented disagreement.
+
+### User feedback fix policy
+
+After Phase A handoff, the user provides feedback in chat. For each feedback round:
 
 ```text
-Phase A APPROVED on disk
-  → save verification log
-  → plan-review-check-phase-a.sh
-  → plan-review.sh (Claude + Codex in parallel)
-  → if either REJECTED:
-        fix all Required fixes (Important+ and above)
-        → commit fixes
-        → Phase A loop (always — any post-Phase-B fix re-opens Phase A)
-        → Phase B loop again
-  → repeat until Claude AND Codex both APPROVED
+implement every suggestion (all severities, including low priority)
+  → ./scripts/quality-gate.sh
+  → re-run Phase A (update verdict if code changed)
+  → return to user or proceed to merge when user says to merge
 ```
 
-### Loop rules
+Implement **every** suggestion from the feedback — Critical through 🟢, “maintenance smell”, “low-hanging”, “deferred”, etc. **Do not defer** because the reviewer labeled something low priority.
 
-| Trigger | Required response |
-|---------|-------------------|
-| Phase A REJECTED | Fix → quality gate → re-write Phase A verdict → loop Phase A |
-| Phase B Claude REJECTED | Fix → commit → Phase A loop → Phase B loop |
-| Phase B Codex REJECTED | Fix → commit → Phase A loop → Phase B loop |
-| Either Phase B reviewer REJECTED | Fix **both** reviewers' required items before re-run |
-| Fix applied | Commit before Phase B re-run (Codex audits `BASE_SHA..HEAD`) |
-| Phase B pass | Both `*-review-claude.md` and `*-review-codex.md` contain `## Verdict: APPROVED` |
+**Only exception:** **explicit disagreement** documented in the next Phase A verdict (item + rationale). Undocumented skips are forbidden.
 
-**Forbidden after a review-driven fix:** stopping to ask the user whether to re-run; leaving fixes uncommitted; re-running only one Phase B reviewer when the other previously passed (always re-run **both** after fixes).
+**Merge only when the user directs you to merge** and all non-disagreed feedback is resolved.
+
+### Plan amendment (conditional)
+
+**Required when:** code-judo items changed plan assumptions.
+
+Write `<slug>-plan-amendment.md` using `docs/implementation/reviews/plan-amendment-template.md`.
 
 ---
 
-## Phase A: Thermo-nuclear self review
+## User feedback loop (replaces automated Phase B)
 
-See skill file at `~/.cursor/plugins/cache/cursor-public/cursor-team-kit/*/skills/thermo-nuclear-code-quality-review/SKILL.md`.
-
-Write verdict to `<worktree>/docs/implementation/reviews/<slug>-review-self-thermonuclear.md` with `## Verdict: APPROVED | REJECTED`.
-
-### Step A5: Plan amendment (conditional)
-
-**Required when:** code-judo items under `## Missed simplification / code-judo opportunities` were implemented **and** changed plan assumptions.
-
-Write `<slug>-plan-amendment.md` using `docs/implementation/reviews/plan-amendment-template.md`. Phase B packet auto-includes it for Claude and Codex.
-
----
-
-## Phase B: External reviews
-
-```bash
-./scripts/plan-worktree-new.sh feat/branch          # before implementation
-./scripts/quality-gate.sh                           # during implementation
-./scripts/plan-review-save-verification.sh docs/implementation/plans/YYYY-MM-DD-feature.md .worktrees/feat-branch
-./scripts/plan-review-check-phase-a.sh .worktrees/feat-branch docs/implementation/plans/YYYY-MM-DD-feature.md
-./scripts/plan-review.sh docs/implementation/plans/YYYY-MM-DD-feature.md .worktrees/feat-branch
-./scripts/plan-review-cleanup.sh .worktrees/feat-branch docs/implementation/plans/YYYY-MM-DD-feature.md
-```
-
-There is no CI. `./scripts/quality-gate.sh` is the canonical verifier.
-
-## Default models
-
-| Channel | Default | Override |
-|---------|---------|----------|
-| Self (Phase A) | Orchestrator + thermo-nuclear skill | — |
-| Claude Code | `opus`, effort `max` | `CLAUDE_REVIEW_MODEL`, `CLAUDE_REVIEW_EFFORT` |
-| Codex | `gpt-5.5`, reasoning `xhigh` | `CODEX_REVIEW_MODEL`, `CODEX_REVIEW_REASONING` |
-
-## Orchestrator checklist
-
-**Phase A:** `./scripts/quality-gate.sh` → thermo-nuclear review → verdict on disk → APPROVED → amendment if needed
-
-**Phase B:** verification log → check-phase-a → plan-review.sh → if either REJECTED → fix → commit → Phase A loop → Phase B loop → **only return when both APPROVED**
-
-**Phase C (cleanup):** delete interim review artifacts from worktree → merge branch into main → remove worktree
-
-See also: `docs/implementation/reviews/README.md`
+See **User feedback fix policy** above — same fix-everything rule as Phase A.
 
 ---
 
 ## Phase C — Cleanup and merge
 
-After Phase B passes (Claude **and** Codex APPROVED), clean up before landing on `main`.
+Run **after user feedback is addressed** and the user asks to merge.
 
-### 1. Delete interim review artifacts (worktree only)
+```bash
+./scripts/plan-review-cleanup.sh . docs/implementation/plans/<plan>.md
+git checkout main
+git merge feat/<branch> --no-ff -m "feat: ..."
+./scripts/quality-gate.sh
+git branch -d feat/<branch>
+```
 
-These are ephemeral audit outputs. **Do not commit or merge them.**
+### Interim artifacts (do not merge to main)
 
-Remove from `<worktree>/docs/implementation/reviews/`:
+Remove before merge (via cleanup script):
 
 - `<slug>-review-self-thermonuclear.md`
-- `<slug>-review-claude.md`
-- `<slug>-review-codex.md`
-- `<slug>-review-packet.md`
-- `<slug>-plan-amendment.md`
+- `<slug>-review-packet.md` (if present)
 - `<slug>-verification.log`
+- Any optional CLI review outputs (`*-review-claude.md`, `*-review-codex.md`)
 
-**Keep on `main`:** templates (`review-*-template.md`, `plan-amendment-template.md`) and `docs/implementation/reviews/README.md`.
+**Keep on main:** templates and `docs/implementation/reviews/README.md`.
 
-```bash
-./scripts/plan-review-cleanup.sh .worktrees/feat-branch docs/implementation/plans/PLAN.md
-```
+---
 
-### 2. Merge into main
+## Optional: manual external review (not orchestrator gate)
 
-```bash
-git checkout main
-git merge feat/branch --no-ff -m "feat: ..."
-```
+`./scripts/plan-review.sh docs/implementation/plans/<plan>.md .` can still be run manually for Claude + Codex reviews. It is **not** required for the orchestrator to return or merge.
 
-Resolve conflicts if any; re-run `./scripts/quality-gate.sh` on `main`.
-
-### 3. Remove worktree
-
-After merge succeeds:
-
-```bash
-git worktree remove .worktrees/feat-branch
-git branch -d feat/branch   # safe once merged
-```
-
-**Forbidden:** leaving stale worktrees after merge; committing interim review artifacts to `main`.
+See `docs/implementation/reviews/README.md` for script configuration.
