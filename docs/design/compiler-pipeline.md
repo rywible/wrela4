@@ -1,7 +1,7 @@
 # Compiler pipeline (current)
 
-How the implemented command-center phases connect today. Later phases (parse,
-check, codegen) will extend this graph; they are not implemented yet.
+How the implemented command-center phases connect today. Later phases (check,
+codegen) will extend this graph.
 
 ```mermaid
 flowchart LR
@@ -11,6 +11,7 @@ flowchart LR
   Batch["lex_files_parallel\n(per frontier batch)"]
   Lex["lex_file\n(per SourceFile)"]
   Import["parse_import_summary\n(per LexedFile)"]
+  Parse["parse_files_parallel\n(per reachable LexedFile)"]
   Merge["merge diagnostics\n(deterministic order)"]
   Out["stdout / exit code"]
 
@@ -19,7 +20,8 @@ flowchart LR
   Map --> Batch
   Batch --> Lex
   Lex --> Import
-  Import --> Merge
+  Import --> Parse
+  Parse --> Merge
   Merge --> Out
 ```
 
@@ -31,6 +33,7 @@ flowchart LR
 | `discover` | root path | `DiscoverResult` | `VecDeque` frontier, canonical de-dupe, parallel batches |
 | `lexer` | `&SourceFile` | `LexedFile` | Tokens + trivia with byte spans; no mode flag |
 | `syntax::imports` | `LexedFile` + `SourceFile` | `ImportSummary` | Minimal `use { } from module.path` parse only |
+| `syntax::parse` | `LexedFile` + `SourceFile` | `ParsedSyntax` | Lossless CST + parser diagnostics |
 | `diagnostic` | — | `Diagnostic` | Phases accumulate; CLI renders |
 | `command` | argv | process exit code | Only layer that writes user output |
 
@@ -48,6 +51,8 @@ flowchart LR
 pub fn lexer::lex_file(source: &SourceFile) -> LexedFile;
 pub fn lexer::lex_files_parallel(files: &[SourceFile]) -> Vec<LexedFile>;
 pub fn syntax::imports::parse_import_summary(lexed: &LexedFile, source: &SourceFile) -> ImportSummary;
+pub fn syntax::parse_file(lexed: &LexedFile, source: &SourceFile) -> ParsedSyntax;
+pub fn syntax::parse_files_parallel(lexed_files: &[LexedFile], source_map: &SourceMap) -> Vec<ParsedSyntax>;
 pub fn discover::discover_from_root(root: impl AsRef<Path>) -> DiscoverResult;
 ```
 
@@ -57,5 +62,6 @@ pub fn discover::discover_from_root(root: impl AsRef<Path>) -> DiscoverResult;
 |---------|------------------|
 | `wrela dump tokens <file>` | load → lex → print |
 | `wrela lex <root.wrela>` | discover → lex all reachable → summarize |
+| `wrela parse <root.wrela>` | discover → lex → parse all reachable → summarize |
 
 See [`supported-wrela-subset.md`](supported-wrela-subset.md) for syntax the toolchain accepts today.

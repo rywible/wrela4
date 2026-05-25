@@ -47,6 +47,19 @@ Rules agents must not violate without an explicit new decision doc in
 | Block comments | Nestable; unterminated → recoverable diagnostic |
 | Unspanned failures | Root load failure must not invent a `FileId` |
 
+## Parser (implemented)
+
+| Decision | Detail |
+|----------|--------|
+| Parser strategy | Handwritten recursive descent with Pratt expression parsing |
+| Tree shape | Lossless CST first; typed views are derived from CST nodes |
+| Trivia | Attached to token elements as leading/trailing ranges; not peer CST children |
+| Coverage | V1 parser covers declarations, member bodies, statements, expressions, imports, and recovery |
+| Imports | CST parser accepts explicit import binders only; aliases and wildcards are parser errors |
+| Recovery | Malformed source produces diagnostics and recovery nodes, not parser panics |
+| Parser parallelism | `parse_files_parallel` uses chunked scoped workers and deterministic `FileId` sorting |
+| CLI surface | `wrela parse <root.wrela>` inspects parse output; `wrela check` remains out of scope |
+
 ## CLI (implemented)
 
 | Command | Behavior |
@@ -54,6 +67,7 @@ Rules agents must not violate without an explicit new decision doc in
 | `help`, `version` | Exit 0 |
 | `dump tokens <file>` | Lex one file; exit 1 on errors |
 | `lex <root.wrela>` | Discover + lex graph; exit 1 on errors |
+| `parse <root.wrela>` | Discover + parse graph; exit 1 on errors |
 | Unknown command | Exit 2 |
 | Malformed arity | Exit 2 (no surplus arguments) |
 

@@ -7,7 +7,7 @@ Plans, review workflow, and delivery status for the Wrela command center.
 | Plan | Status | Notes |
 |------|--------|-------|
 | [Lexer and initial Rust setup](plans/2026-05-22-lexer-and-initial-rust-setup.md) | **Complete** | Merged to `main` |
-| Parser | Not started | Next major phase |
+| [CST parser](plans/2026-05-24-cst-parser.md) | **Complete** | Lossless CST parser + `wrela parse` |
 | `wrela check` / `wrela build` / `wrela test` | Not started | Listed in ADR 0001; CLI stubs only |
 
 Update this table when starting or finishing a plan.
@@ -48,6 +48,7 @@ Cursor skill: [`.cursor/skills/multi-model-plan-review/SKILL.md`](../../.cursor/
 
 - [`plans/plan-template.md`](plans/plan-template.md) — template for new plans
 - [`plans/2026-05-22-lexer-and-initial-rust-setup.md`](plans/2026-05-22-lexer-and-initial-rust-setup.md) — reference completed plan
+- [`plans/2026-05-24-cst-parser.md`](plans/2026-05-24-cst-parser.md) — CST parser plan
 
 ## Reviews directory
 
