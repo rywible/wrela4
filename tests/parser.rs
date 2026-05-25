@@ -318,9 +318,12 @@ fn use_without_from_still_parses_module_path() {
 #[test]
 fn match_arm_body_is_expression_not_arbitrary_statement() {
     let parsed = parse_text("class C { fn m() { match x { 0 => let y = 1 } } }");
-    assert!(parsed.diagnostics().iter().any(|diagnostic| {
-        diagnostic.message() == "expected expression"
-    }));
+    assert!(
+        parsed
+            .diagnostics()
+            .iter()
+            .any(|diagnostic| { diagnostic.message() == "expected expression" })
+    );
 }
 
 #[test]
