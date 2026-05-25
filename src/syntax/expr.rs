@@ -1,13 +1,10 @@
 use crate::lexer::{Keyword, Punct, TokenKind};
 
 use super::cst::Checkpoint;
-#[cfg(test)]
-use super::cst::{ParsedSyntax, SyntaxElement, SyntaxNodeId, SyntaxTree};
 use super::parse::Parser;
 use super::syntax_kind::{SyntaxErrorKind, SyntaxKind};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd)]
-#[allow(dead_code)]
 pub(crate) enum BindingPower {
     Lowest = 0,
     Or = 1,
@@ -19,7 +16,6 @@ pub(crate) enum BindingPower {
     Postfix = 7,
 }
 
-#[allow(dead_code)]
 impl<'a> Parser<'a> {
     pub(crate) fn parse_expr(&mut self) {
         self.parse_expr_bp(BindingPower::Lowest);
@@ -189,7 +185,6 @@ impl<'a> Parser<'a> {
     }
 }
 
-#[allow(dead_code)]
 fn infix_binding_power(kind: TokenKind) -> Option<(BindingPower, BindingPower)> {
     match kind {
         TokenKind::Punct(Punct::PipePipe) => Some((BindingPower::Or, BindingPower::And)),
@@ -211,36 +206,14 @@ fn infix_binding_power(kind: TokenKind) -> Option<(BindingPower, BindingPower)> 
 }
 
 #[cfg(test)]
-impl<'a> Parser<'a> {
-    pub(crate) fn parse_expr_for_test(mut self) -> ParsedSyntax {
-        self.start_node(SyntaxKind::Module);
-        self.parse_expr();
-        while !self.at(TokenKind::Eof) {
-            self.bump();
-        }
-        self.bump();
-        self.finish_node();
-        let tree = self.builder.finish();
-        ParsedSyntax::new(self.lexed.file_id(), tree, self.diagnostics)
-    }
-}
-
-#[cfg(test)]
 mod tests {
     use super::*;
     use crate::diagnostic::has_errors;
-    use crate::lexer::lex_file;
-    use crate::source::{FileId, SourceFile};
-    use std::path::PathBuf;
+    use crate::syntax::ParsedSyntax;
+    use crate::syntax::testing::{parse_fragment_text, tree_contains};
 
     fn parse_expr_text(text: &str) -> ParsedSyntax {
-        let source = SourceFile::new(
-            FileId::new(0),
-            PathBuf::from("expr.wrela"),
-            text.to_string(),
-        );
-        let lexed = lex_file(&source);
-        Parser::new(&lexed, &source).parse_expr_for_test()
+        parse_fragment_text(text, "expr.wrela", |parser| parser.parse_expr())
     }
 
     #[test]
@@ -267,18 +240,5 @@ mod tests {
         assert!(parsed.diagnostics().iter().any(
             |diagnostic| diagnostic.message() == "expected return after else in try expression"
         ));
-    }
-
-    fn tree_contains(tree: &SyntaxTree, kind: SyntaxKind) -> bool {
-        fn walk(tree: &SyntaxTree, node: SyntaxNodeId, kind: SyntaxKind) -> bool {
-            tree.node(node).kind() == kind
-                || tree
-                    .elements(tree.node(node).children())
-                    .iter()
-                    .any(|element| {
-                        matches!(*element, SyntaxElement::Node(child) if walk(tree, child, kind))
-                    })
-        }
-        walk(tree, tree.root(), kind)
     }
 }

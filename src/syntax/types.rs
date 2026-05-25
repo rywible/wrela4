@@ -1,11 +1,8 @@
 use crate::lexer::{Keyword, Punct, TokenKind};
 
-#[cfg(test)]
-use super::cst::ParsedSyntax;
 use super::parse::Parser;
 use super::syntax_kind::{SyntaxErrorKind, SyntaxKind};
 
-#[allow(dead_code)]
 impl<'a> Parser<'a> {
     pub(crate) fn parse_type_ref(&mut self) {
         self.start_node(SyntaxKind::TypeRef);
@@ -79,36 +76,13 @@ impl<'a> Parser<'a> {
 }
 
 #[cfg(test)]
-impl<'a> Parser<'a> {
-    pub(crate) fn parse_type_for_test(mut self) -> ParsedSyntax {
-        self.start_node(SyntaxKind::Module);
-        self.parse_type_ref();
-        while !self.at(TokenKind::Eof) {
-            self.bump();
-        }
-        self.bump();
-        self.finish_node();
-        let tree = self.builder.finish();
-        ParsedSyntax::new(self.lexed.file_id(), tree, self.diagnostics)
-    }
-}
-
-#[cfg(test)]
 mod tests {
-    use super::*;
     use crate::diagnostic::has_errors;
-    use crate::lexer::lex_file;
-    use crate::source::{FileId, SourceFile};
-    use std::path::PathBuf;
+    use crate::syntax::ParsedSyntax;
+    use crate::syntax::testing::parse_fragment_text;
 
     fn parse_type_text(text: &str) -> ParsedSyntax {
-        let source = SourceFile::new(
-            FileId::new(0),
-            PathBuf::from("type.wrela"),
-            text.to_string(),
-        );
-        let lexed = lex_file(&source);
-        Parser::new(&lexed, &source).parse_type_for_test()
+        parse_fragment_text(text, "type.wrela", |parser| parser.parse_type_ref())
     }
 
     #[test]

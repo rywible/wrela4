@@ -1,5 +1,8 @@
 use std::path::PathBuf;
 
+mod common;
+
+use common::tree_contains;
 use wrela::diagnostic::has_errors;
 use wrela::discover::discover_from_root;
 use wrela::lexer::lex_file;
@@ -31,18 +34,6 @@ fn parse_fixture(rel: &str) -> ParsedSyntax {
     let source = SourceFile::new(FileId::new(0), path, text);
     let lexed = lex_file(&source);
     parse_file(&lexed, &source)
-}
-
-fn tree_contains(tree: &SyntaxTree, kind: SyntaxKind) -> bool {
-    fn walk(tree: &SyntaxTree, node: wrela::syntax::SyntaxNodeId, kind: SyntaxKind) -> bool {
-        if tree.node(node).kind() == kind {
-            return true;
-        }
-        tree.elements(tree.node(node).children()).iter().any(
-            |element| matches!(*element, SyntaxElement::Node(child) if walk(tree, child, kind)),
-        )
-    }
-    walk(tree, tree.root(), kind)
 }
 
 fn count_nodes(tree: &SyntaxTree, kind: SyntaxKind) -> usize {
