@@ -263,6 +263,19 @@ impl ParsedSyntax {
             diagnostics,
         }
     }
+
+    pub fn missing_source(file_id: FileId) -> Self {
+        let anchor = Span::new(file_id, 0, 0);
+        let mut builder = SyntaxTreeBuilder::new(file_id);
+        builder.start_node(SyntaxKind::Module, anchor);
+        builder.finish_node();
+        let tree = builder.finish();
+        Self::new(
+            file_id,
+            tree,
+            vec![Diagnostic::unspanned_error("missing source for lexed file")],
+        )
+    }
     pub fn file_id(&self) -> FileId {
         self.file_id
     }
@@ -338,7 +351,9 @@ impl SyntaxTreeBuilder {
     }
 
     pub fn token(&mut self, token: SyntaxToken) {
-        let id = SyntaxTokenId::new(self.tokens.len() as u32);
+        let len = self.tokens.len();
+        debug_assert!(len < u32::MAX as usize, "CST token index overflow");
+        let id = SyntaxTokenId::new(len as u32);
         self.tokens.push(token);
         self.push_child(SyntaxElement::Token(id));
     }
@@ -350,10 +365,22 @@ impl SyntaxTreeBuilder {
     pub fn finish_node(&mut self) -> SyntaxNodeId {
         let frame = self.stack.pop().expect("finish_node requires open node");
         let span = self.children_span(&frame.children).unwrap_or(frame.anchor);
-        let start = self.elements.len() as u32;
+        let element_start = self.elements.len();
+        debug_assert!(
+            element_start < u32::MAX as usize,
+            "CST element index overflow"
+        );
+        let start = element_start as u32;
         self.elements.extend(frame.children);
-        let end = self.elements.len() as u32;
-        let id = SyntaxNodeId::new(self.nodes.len() as u32);
+        let element_end = self.elements.len();
+        debug_assert!(
+            element_end < u32::MAX as usize,
+            "CST element index overflow"
+        );
+        let end = element_end as u32;
+        let node_len = self.nodes.len();
+        debug_assert!(node_len < u32::MAX as usize, "CST node index overflow");
+        let id = SyntaxNodeId::new(node_len as u32);
         self.nodes.push(SyntaxNode::new(
             frame.kind,
             span,

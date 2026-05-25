@@ -74,4 +74,5 @@ pub enum SyntaxErrorKind {
     ExpectedToken,
     UnexpectedToken,
     MissingCloseDelimiter,
+    ExpressionTooDeep,
 }

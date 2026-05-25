@@ -314,3 +314,26 @@ fn use_without_from_still_parses_module_path() {
     assert!(tree_contains(parsed.tree(), SyntaxKind::ModulePath));
     assert_eq!(count_nodes(parsed.tree(), SyntaxKind::ClassDecl), 1);
 }
+
+#[test]
+fn match_arm_body_is_expression_not_arbitrary_statement() {
+    let parsed = parse_text("class C { fn m() { match x { 0 => let y = 1 } } }");
+    assert!(parsed.diagnostics().iter().any(|diagnostic| {
+        diagnostic.message() == "expected expression"
+    }));
+}
+
+#[test]
+fn parse_files_parallel_reports_missing_source() {
+    let source = source_from_text("orphan.wrela", "module app.test\n");
+    let lexed = lex_file(&source);
+    let empty_map = SourceMap::new();
+    let parsed = parse_files_parallel(std::slice::from_ref(&lexed), &empty_map);
+    assert_eq!(parsed.len(), 1);
+    assert!(
+        parsed[0]
+            .diagnostics()
+            .iter()
+            .any(|diagnostic| { diagnostic.message() == "missing source for lexed file" })
+    );
+}

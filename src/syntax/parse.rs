@@ -5,8 +5,21 @@ use crate::source::{SourceFile, SourceMap, Span};
 use super::cst::{ParsedSyntax, SyntaxToken, SyntaxTreeBuilder, TokenIndex, TriviaRange};
 use super::syntax_kind::{SyntaxErrorKind, SyntaxKind};
 
+/// Maximum Pratt-parser recursion depth before emitting `ExpressionTooDeep`.
+pub(crate) const MAX_EXPR_DEPTH: u32 = 256;
+
+/// Parse files sequentially when at or below this count (avoids thread overhead).
+const PARALLEL_PARSE_THRESHOLD: usize = 2;
+
 pub fn parse_file(lexed: &LexedFile, source: &SourceFile) -> ParsedSyntax {
     Parser::new(lexed, source).parse_module()
+}
+
+fn parse_lexed_with_source_map(lexed: &LexedFile, source_map: &SourceMap) -> ParsedSyntax {
+    match source_map.get(lexed.file_id()) {
+        Some(source) => parse_file(lexed, source),
+        None => ParsedSyntax::missing_source(lexed.file_id()),
+    }
 }
 
 pub fn parse_files_parallel(
@@ -15,6 +28,17 @@ pub fn parse_files_parallel(
 ) -> Vec<ParsedSyntax> {
     if lexed_files.is_empty() {
         return Vec::new();
+    }
+
+    debug_assert_unique_file_ids(lexed_files);
+
+    if lexed_files.len() <= PARALLEL_PARSE_THRESHOLD {
+        let mut parsed: Vec<ParsedSyntax> = lexed_files
+            .iter()
+            .map(|lexed| parse_lexed_with_source_map(lexed, source_map))
+            .collect();
+        parsed.sort_by_key(|module| module.file_id().raw());
+        return parsed;
     }
 
     let worker_count = std::thread::available_parallelism()
@@ -29,27 +53,44 @@ pub fn parse_files_parallel(
             handles.push(scope.spawn(move || {
                 chunk
                     .iter()
-                    .map(|lexed| {
-                        let source = source_map
-                            .get(lexed.file_id())
-                            .expect("lexed file has source");
-                        parse_file(lexed, source)
-                    })
+                    .map(|lexed| parse_lexed_with_source_map(lexed, source_map))
                     .collect::<Vec<_>>()
             }));
         }
 
         let mut parsed = Vec::with_capacity(lexed_files.len());
+        let mut panic_payload = None;
         for handle in handles {
             match handle.join() {
                 Ok(mut chunk) => parsed.append(&mut chunk),
-                Err(payload) => std::panic::resume_unwind(payload),
+                Err(payload) => {
+                    if panic_payload.is_none() {
+                        panic_payload = Some(payload);
+                    }
+                }
             }
+        }
+        if let Some(payload) = panic_payload {
+            std::panic::resume_unwind(payload);
         }
         parsed
     });
     parsed.sort_by_key(|module| module.file_id().raw());
     parsed
+}
+
+fn debug_assert_unique_file_ids(lexed_files: &[LexedFile]) {
+    debug_assert!(
+        {
+            let mut ids = lexed_files
+                .iter()
+                .map(|lexed| lexed.file_id().raw())
+                .collect::<Vec<_>>();
+            ids.sort_unstable();
+            ids.windows(2).all(|pair| pair[0] != pair[1])
+        },
+        "parse_files_parallel requires unique FileId values"
+    );
 }
 
 pub(crate) struct Parser<'a> {
@@ -61,19 +102,28 @@ pub(crate) struct Parser<'a> {
     eof_emitted: bool,
     pub(crate) builder: SyntaxTreeBuilder,
     pub(crate) diagnostics: Vec<Diagnostic>,
+    pub(crate) expr_depth: u32,
 }
 
 impl<'a> Parser<'a> {
     pub(crate) fn new(lexed: &'a LexedFile, source: &'a SourceFile) -> Self {
+        let tokens = lexed.tokens();
+        debug_assert!(!tokens.is_empty(), "lexed file must include EOF token");
+        debug_assert_eq!(
+            tokens.last().map(|token| token.kind()),
+            Some(TokenKind::Eof),
+            "lexed file must end with EOF"
+        );
         Self {
             source,
             lexed,
-            tokens: lexed.tokens(),
+            tokens,
             token_index: 0,
             trivia_index: 0,
             eof_emitted: false,
             builder: SyntaxTreeBuilder::new(lexed.file_id()),
             diagnostics: Vec::new(),
+            expr_depth: 0,
         }
     }
 
@@ -126,7 +176,10 @@ impl<'a> Parser<'a> {
     }
 
     pub(crate) fn peek_n(&self, offset: usize) -> Token {
-        self.tokens[(self.token_index + offset).min(self.tokens.len() - 1)]
+        debug_assert!(!self.tokens.is_empty());
+        let index = self.token_index + offset;
+        debug_assert!(index < self.tokens.len(), "peek_n past EOF");
+        self.tokens[index]
     }
 
     pub(crate) fn at(&self, kind: TokenKind) -> bool {
@@ -187,15 +240,15 @@ impl<'a> Parser<'a> {
 
     fn take_trailing_trivia(&mut self, token: Token) -> TriviaRange {
         let start = self.trivia_index as u32;
+        let token_end = token.span().end();
         let next_start = self
             .tokens
             .get(self.token_index + 1)
             .map(|next| next.span().start())
             .unwrap_or(u32::MAX);
+        // Lexer trivia never overlaps token spans; attach trivia strictly between this
+        // token's end and the next token's start (through the first trailing newline).
         while let Some(trivia) = self.lexed.trivia().get(self.trivia_index) {
-            if trivia.span().start() < token.span().end() {
-                break;
-            }
             if trivia.span().start() >= next_start {
                 break;
             }
@@ -203,6 +256,10 @@ impl<'a> Parser<'a> {
                 self.trivia_index += 1;
                 break;
             }
+            debug_assert!(
+                trivia.span().start() >= token_end,
+                "trailing trivia must not overlap token span"
+            );
             self.trivia_index += 1;
         }
         TriviaRange::new(start, self.trivia_index as u32)

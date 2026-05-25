@@ -72,7 +72,7 @@ impl<'a> Parser<'a> {
         self.finish_node();
     }
 
-    fn parse_expr_stmt(&mut self) {
+    pub(crate) fn parse_expr_stmt(&mut self) {
         self.start_node(SyntaxKind::ExprStmt);
         let diagnostics_before = self.diagnostics.len();
         self.parse_expr();
@@ -98,12 +98,18 @@ impl<'a> Parser<'a> {
         self.start_node(SyntaxKind::MatchArm);
         self.parse_match_pattern();
         self.expect_punct(Punct::FatArrow, "expected match arm");
+        self.parse_match_arm_body();
+        self.finish_node();
+    }
+
+    fn parse_match_arm_body(&mut self) {
         if self.peek().kind() == TokenKind::Punct(Punct::OpenBrace) {
             self.parse_block();
+        } else if self.peek().kind() == TokenKind::Keyword(Keyword::Return) {
+            self.parse_return_stmt();
         } else {
-            self.parse_stmt();
+            self.parse_expr_stmt();
         }
-        self.finish_node();
     }
 
     fn parse_match_pattern(&mut self) {

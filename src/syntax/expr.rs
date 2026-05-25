@@ -1,7 +1,7 @@
 use crate::lexer::{Keyword, Punct, TokenKind};
 
 use super::cst::Checkpoint;
-use super::parse::Parser;
+use super::parse::{MAX_EXPR_DEPTH, Parser};
 use super::syntax_kind::{SyntaxErrorKind, SyntaxKind};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd)]
@@ -21,6 +21,15 @@ impl<'a> Parser<'a> {
     }
 
     pub(crate) fn parse_expr_bp(&mut self, min_bp: BindingPower) {
+        if self.expr_depth >= MAX_EXPR_DEPTH {
+            self.start_node(SyntaxKind::RecoveryNode);
+            self.error_at_current(SyntaxErrorKind::ExpressionTooDeep, "expression too deep");
+            self.bump();
+            self.finish_node();
+            return;
+        }
+        self.expr_depth += 1;
+
         let checkpoint = self.checkpoint();
         self.parse_prefix_or_atom();
         loop {
@@ -38,6 +47,8 @@ impl<'a> Parser<'a> {
             self.parse_expr_bp(right_bp);
             self.finish_node();
         }
+
+        self.expr_depth -= 1;
     }
 
     fn parse_prefix_or_atom(&mut self) {
@@ -239,5 +250,19 @@ mod tests {
         assert!(parsed.diagnostics().iter().any(
             |diagnostic| diagnostic.message() == "expected return after else in try expression"
         ));
+    }
+
+    #[test]
+    fn deep_expression_emits_too_deep_diagnostic() {
+        let depth = (super::super::parse::MAX_EXPR_DEPTH + 1) as usize;
+        let text = format!("{}1{}", "(".repeat(depth), ")".repeat(depth));
+        let parsed = parse_expr_text(&text);
+        assert!(
+            parsed
+                .diagnostics()
+                .iter()
+                .any(|diagnostic| { diagnostic.message() == "expression too deep" })
+        );
+        assert!(tree_contains(parsed.tree(), SyntaxKind::RecoveryNode));
     }
 }
