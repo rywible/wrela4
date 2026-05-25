@@ -5,21 +5,11 @@ use super::syntax_kind::SyntaxKind;
 
 impl<'a> Parser<'a> {
     pub(crate) fn recover_to_statement_boundary(&mut self) {
-        if self.at_statement_start()
-            || matches!(
-                self.peek().kind(),
-                TokenKind::Punct(Punct::CloseBrace) | TokenKind::Eof
-            )
-        {
+        if self.at_statement_boundary() {
             return;
         }
         self.start_node(SyntaxKind::RecoveryNode);
-        while !self.at_statement_start()
-            && !matches!(
-                self.peek().kind(),
-                TokenKind::Punct(Punct::CloseBrace) | TokenKind::Eof
-            )
-        {
+        while !self.at_statement_boundary() {
             self.bump();
         }
         self.finish_node();
@@ -63,7 +53,6 @@ impl<'a> Parser<'a> {
         matches!(
             self.peek().kind(),
             TokenKind::Keyword(Keyword::Constructor)
-                | TokenKind::Keyword(Keyword::Phase)
                 | TokenKind::Keyword(Keyword::Fn)
                 | TokenKind::Keyword(Keyword::Asm)
                 | TokenKind::Keyword(Keyword::Test)
@@ -83,5 +72,13 @@ impl<'a> Parser<'a> {
                 | TokenKind::Keyword(Keyword::Loop)
                 | TokenKind::Keyword(Keyword::Assert)
         )
+    }
+
+    pub(crate) fn at_statement_boundary(&self) -> bool {
+        self.at_statement_start()
+            || matches!(
+                self.peek().kind(),
+                TokenKind::Punct(Punct::CloseBrace) | TokenKind::Eof
+            )
     }
 }

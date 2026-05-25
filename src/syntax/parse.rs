@@ -89,6 +89,32 @@ impl<'a> Parser<'a> {
         ParsedSyntax::new(self.lexed.file_id(), tree, self.diagnostics)
     }
 
+    fn before_close(&self, close: Punct) -> bool {
+        self.peek().kind() != TokenKind::Punct(close) && self.peek().kind() != TokenKind::Eof
+    }
+
+    fn parse_list_until<F>(&mut self, close: Punct, close_label: &'static str, mut parse_element: F)
+    where
+        F: FnMut(&mut Self),
+    {
+        while self.before_close(close) {
+            parse_element(self);
+        }
+        self.expect_close_punct(close, close_label);
+    }
+
+    fn parse_braced<F>(
+        &mut self,
+        open_label: &'static str,
+        close_label: &'static str,
+        parse_element: F,
+    ) where
+        F: FnMut(&mut Self),
+    {
+        self.expect_punct(Punct::OpenBrace, open_label);
+        self.parse_list_until(Punct::CloseBrace, close_label, parse_element);
+    }
+
     pub(crate) fn parse_item(&mut self) {
         match self.peek().kind() {
             TokenKind::Keyword(Keyword::Pub) => self.parse_pub_item(),
@@ -139,13 +165,9 @@ impl<'a> Parser<'a> {
         self.bump();
         self.expect_identifier();
         self.parse_generic_param_list();
-        self.expect_punct(Punct::OpenBrace, "expected '{'");
-        while self.peek().kind() != TokenKind::Punct(Punct::CloseBrace)
-            && self.peek().kind() != TokenKind::Eof
-        {
-            self.parse_method_signature_decl();
-        }
-        self.expect_close_punct(Punct::CloseBrace, "expected '}'");
+        self.parse_braced("expected '{'", "expected '}'", |parser| {
+            parser.parse_method_signature_decl();
+        });
         self.finish_node();
     }
 
@@ -177,12 +199,9 @@ impl<'a> Parser<'a> {
         self.parse_generic_param_list();
         self.parse_implements_clause();
         self.expect_punct(Punct::OpenBrace, "expected '{'");
-        while self.peek().kind() != TokenKind::Punct(Punct::CloseBrace)
-            && self.peek().kind() != TokenKind::Eof
-        {
-            self.parse_member();
-        }
-        self.expect_close_punct(Punct::CloseBrace, "expected '}'");
+        self.parse_list_until(Punct::CloseBrace, "expected '}'", |parser| {
+            parser.parse_member();
+        });
     }
 
     fn parse_implements_clause(&mut self) {
@@ -197,13 +216,9 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_field_block(&mut self) {
-        self.expect_punct(Punct::OpenBrace, "expected '{'");
-        while self.peek().kind() != TokenKind::Punct(Punct::CloseBrace)
-            && self.peek().kind() != TokenKind::Eof
-        {
-            self.parse_field_decl();
-        }
-        self.expect_close_punct(Punct::CloseBrace, "expected '}'");
+        self.parse_braced("expected '{'", "expected '}'", |parser| {
+            parser.parse_field_decl();
+        });
     }
 
     fn parse_field_decl(&mut self) {
@@ -338,17 +353,13 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_image_body(&mut self) {
-        self.expect_punct(Punct::OpenBrace, "expected '{'");
-        while self.peek().kind() != TokenKind::Punct(Punct::CloseBrace)
-            && self.peek().kind() != TokenKind::Eof
-        {
-            if self.peek().kind() == TokenKind::Keyword(Keyword::Phase) {
-                self.parse_phase_decl();
+        self.parse_braced("expected '{'", "expected '}'", |parser| {
+            if parser.peek().kind() == TokenKind::Keyword(Keyword::Phase) {
+                parser.parse_phase_decl();
             } else {
-                self.parse_error_item();
+                parser.parse_error_item();
             }
-        }
-        self.expect_close_punct(Punct::CloseBrace, "expected '}'");
+        });
     }
 
     fn parse_member_error(&mut self) {
@@ -450,20 +461,11 @@ impl<'a> Parser<'a> {
     pub(crate) fn parse_block(&mut self) {
         self.start_node(SyntaxKind::Block);
         self.expect_punct(Punct::OpenBrace, "expected '{'");
-        while self.peek().kind() != TokenKind::Punct(Punct::CloseBrace)
-            && self.peek().kind() != TokenKind::Eof
-        {
+        while self.before_close(Punct::CloseBrace) {
             let index_before = self.token_index;
             self.parse_stmt();
-            if self.token_index == index_before
-                && self.peek().kind() != TokenKind::Punct(Punct::CloseBrace)
-                && self.peek().kind() != TokenKind::Eof
-            {
-                self.error_at_current(
-                    SyntaxErrorKind::UnexpectedToken,
-                    "unexpected token in statement",
-                );
-                self.bump();
+            if self.token_index == index_before {
+                self.recover_to_statement_boundary();
             }
         }
         self.expect_close_punct(Punct::CloseBrace, "expected '}'");
@@ -522,11 +524,7 @@ impl<'a> Parser<'a> {
 
     fn parse_expr_stmt(&mut self) {
         self.start_node(SyntaxKind::ExprStmt);
-        let diagnostics_before = self.diagnostics.len();
         self.parse_expr();
-        if self.diagnostics.len() > diagnostics_before {
-            self.recover_to_statement_boundary();
-        }
         self.eat_punct(Punct::Semicolon);
         self.finish_node();
     }
@@ -536,12 +534,9 @@ impl<'a> Parser<'a> {
         self.bump();
         self.parse_expr();
         self.expect_punct(Punct::OpenBrace, "expected '{'");
-        while self.peek().kind() != TokenKind::Punct(Punct::CloseBrace)
-            && self.peek().kind() != TokenKind::Eof
-        {
-            self.parse_match_arm();
-        }
-        self.expect_close_punct(Punct::CloseBrace, "expected '}'");
+        self.parse_list_until(Punct::CloseBrace, "expected '}'", |parser| {
+            parser.parse_match_arm();
+        });
         self.finish_node();
     }
 
@@ -624,22 +619,6 @@ impl<'a> Parser<'a> {
             self.error_at_current(SyntaxErrorKind::ExpectedAssertKind, "expected assert kind");
         }
         self.finish_node();
-    }
-
-    pub(crate) fn at_statement_boundary(&self) -> bool {
-        matches!(
-            self.peek().kind(),
-            TokenKind::Eof
-                | TokenKind::Punct(Punct::CloseBrace)
-                | TokenKind::Keyword(Keyword::Let)
-                | TokenKind::Keyword(Keyword::Return)
-                | TokenKind::Keyword(Keyword::Match)
-                | TokenKind::Keyword(Keyword::Repeat)
-                | TokenKind::Keyword(Keyword::For)
-                | TokenKind::Keyword(Keyword::Drain)
-                | TokenKind::Keyword(Keyword::Loop)
-                | TokenKind::Keyword(Keyword::Assert)
-        )
     }
 
     pub(crate) fn peek(&self) -> Token {
