@@ -1,0 +1,15 @@
+class Reductions {
+    fn run(read self, packets: Table[Packet, 256]) -> U64 {
+        let total = reduce packets.rows(valid) as row, acc: U64 = 0 {
+            return acc + packets.len[row]
+        }
+
+        let found = scan packets as i until packets.len[i] == 0 {
+            observer.observe(i)
+        }
+
+        assert value total == 0
+        assert same service_a.parser == service_b.parser
+        return total
+    }
+}

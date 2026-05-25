@@ -4,6 +4,7 @@ use crate::diagnostic::{Diagnostic, has_errors};
 use crate::discover::discover_from_root;
 use crate::lexer::{LexedFile, Token, Trivia, lex_file};
 use crate::source::{FileId, SourceFile, SourceMap, Span};
+use crate::syntax::{parse_files_parallel, summarize_module};
 
 pub fn run<I>(args: I) -> i32
 where
@@ -30,12 +31,14 @@ where
             }
             let _ = writeln!(out, "wrela commands: help, version");
             let _ = writeln!(out, "wrela lex <root.wrela>");
+            let _ = writeln!(out, "wrela parse <root.wrela>");
             let _ = writeln!(out, "wrela dump tokens <file.wrela>");
             0
         }
         None => {
             let _ = writeln!(out, "wrela commands: help, version");
             let _ = writeln!(out, "wrela lex <root.wrela>");
+            let _ = writeln!(out, "wrela parse <root.wrela>");
             let _ = writeln!(out, "wrela dump tokens <file.wrela>");
             0
         }
@@ -74,6 +77,20 @@ where
                     2
                 } else {
                     lex_root(path, out, err)
+                }
+            }
+            None => {
+                let _ = writeln!(err, "missing root file path");
+                2
+            }
+        },
+        Some("parse") => match collected.get(2) {
+            Some(path) => {
+                if collected.len() > 3 {
+                    let _ = writeln!(err, "malformed command");
+                    2
+                } else {
+                    parse_root(path, out, err)
                 }
             }
             None => {
@@ -156,6 +173,57 @@ where
     print_diagnostics(out, diagnostics);
 
     if has_errors(diagnostics) { 1 } else { 0 }
+}
+
+fn parse_root<W, E>(path: &str, out: &mut W, _err: &mut E) -> i32
+where
+    W: std::io::Write,
+    E: std::io::Write,
+{
+    let result = discover_from_root(path);
+    let source_map = result.source_map();
+    let discovery_diagnostics = result.diagnostics();
+    let parsed = parse_files_parallel(result.lexed_files(), source_map);
+
+    let source_root = source_map
+        .files()
+        .first()
+        .and_then(|file| file.path().parent());
+
+    for parsed_file in &parsed {
+        let source = source_map
+            .get(parsed_file.file_id())
+            .expect("parsed file has source");
+        let summary = summarize_module(parsed_file);
+        let diagnostic_count = diagnostics_for_file(discovery_diagnostics, parsed_file.file_id())
+            + parsed_file.diagnostics().len();
+        let path = format_file_path(source_root, source);
+
+        let _ = writeln!(
+            out,
+            "file {} {} nodes={} tokens={} items={} diagnostics={}",
+            parsed_file.file_id().raw(),
+            path,
+            summary.node_count(),
+            summary.token_count(),
+            summary.item_count(),
+            diagnostic_count
+        );
+    }
+
+    print_diagnostics(out, discovery_diagnostics);
+    for parsed_file in &parsed {
+        print_diagnostics(out, parsed_file.diagnostics());
+    }
+
+    let has_parser_errors = parsed
+        .iter()
+        .any(|parsed_file| has_errors(parsed_file.diagnostics()));
+    if has_errors(discovery_diagnostics) || has_parser_errors {
+        1
+    } else {
+        0
+    }
 }
 
 fn print_lexed_items<W>(out: &mut W, lexed: &LexedFile)
@@ -256,6 +324,7 @@ mod tests {
         assert_eq!(code, 0);
         let out = String::from_utf8(out).unwrap();
         assert!(out.contains("wrela lex <root.wrela>"));
+        assert!(out.contains("wrela parse <root.wrela>"));
         assert!(out.contains("wrela dump tokens <file.wrela>"));
         assert!(err.is_empty());
     }
@@ -299,5 +368,48 @@ mod tests {
                 .unwrap()
                 .contains("malformed command")
         );
+    }
+
+    #[test]
+    fn surplus_parse_args_exit_two() {
+        let mut out = Vec::new();
+        let mut err = Vec::new();
+        let code = run_with_io(
+            vec![
+                "wrela".to_string(),
+                "parse".to_string(),
+                "root.wrela".to_string(),
+                "extra".to_string(),
+            ],
+            &mut out,
+            &mut err,
+        );
+
+        assert_eq!(code, 2);
+        assert!(
+            String::from_utf8(err)
+                .unwrap()
+                .contains("malformed command")
+        );
+        assert!(out.is_empty());
+    }
+
+    #[test]
+    fn help_lists_parse_command() {
+        let mut out = Vec::new();
+        let mut err = Vec::new();
+        let code = run_with_io(
+            vec!["wrela".to_string(), "help".to_string()],
+            &mut out,
+            &mut err,
+        );
+
+        assert_eq!(code, 0);
+        assert!(
+            String::from_utf8(out)
+                .unwrap()
+                .contains("wrela parse <root.wrela>")
+        );
+        assert!(err.is_empty());
     }
 }

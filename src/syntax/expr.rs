@@ -56,6 +56,8 @@ impl<'a> Parser<'a> {
             | TokenKind::Keyword(Keyword::Mut)
             | TokenKind::Keyword(Keyword::Own) => self.parse_prefix_expr(),
             TokenKind::Keyword(Keyword::Try) => self.parse_try_expr(),
+            TokenKind::Keyword(Keyword::Reduce) => self.parse_reduce_expr(),
+            TokenKind::Keyword(Keyword::Scan) => self.parse_scan_expr(),
             _ => self.error_at_current(SyntaxErrorKind::ExpectedExpression, "expected expression"),
         }
     }
@@ -101,6 +103,34 @@ impl<'a> Parser<'a> {
                 );
             }
         }
+        self.finish_node();
+    }
+
+    fn parse_reduce_expr(&mut self) {
+        self.start_node(SyntaxKind::ReduceExpr);
+        self.bump();
+        self.parse_expr_bp(BindingPower::Postfix);
+        self.expect_keyword(Keyword::As, "expected as in reduce expression");
+        self.expect_binding_name();
+        self.expect_punct(Punct::Comma, "expected ','");
+        self.expect_binding_name();
+        self.expect_punct(Punct::Colon, "expected ':'");
+        self.parse_type_ref();
+        self.expect_punct(Punct::Eq, "expected '='");
+        self.parse_expr();
+        self.parse_block();
+        self.finish_node();
+    }
+
+    fn parse_scan_expr(&mut self) {
+        self.start_node(SyntaxKind::ScanExpr);
+        self.bump();
+        self.parse_expr_bp(BindingPower::Postfix);
+        self.expect_keyword(Keyword::As, "expected as in scan expression");
+        self.expect_binding_name();
+        self.expect_keyword(Keyword::Until, "expected until in scan expression");
+        self.parse_expr();
+        self.parse_block();
         self.finish_node();
     }
 

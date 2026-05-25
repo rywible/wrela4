@@ -1,12 +1,55 @@
 use crate::diagnostic::Diagnostic;
 use crate::lexer::{Keyword, LexedFile, Punct, Token, TokenKind, TriviaKind};
-use crate::source::{SourceFile, Span};
+use crate::source::{SourceFile, SourceMap, Span};
 
 use super::cst::{ParsedSyntax, SyntaxToken, SyntaxTreeBuilder, TokenIndex, TriviaRange};
 use super::syntax_kind::{SyntaxErrorKind, SyntaxKind};
 
 pub fn parse_file(lexed: &LexedFile, source: &SourceFile) -> ParsedSyntax {
     Parser::new(lexed, source).parse_module()
+}
+
+pub fn parse_files_parallel(
+    lexed_files: &[LexedFile],
+    source_map: &SourceMap,
+) -> Vec<ParsedSyntax> {
+    if lexed_files.is_empty() {
+        return Vec::new();
+    }
+
+    let worker_count = std::thread::available_parallelism()
+        .map(|count| count.get())
+        .unwrap_or(1)
+        .min(lexed_files.len());
+    let chunk_size = lexed_files.len().div_ceil(worker_count);
+
+    let mut parsed = std::thread::scope(|scope| {
+        let mut handles = Vec::new();
+        for chunk in lexed_files.chunks(chunk_size) {
+            handles.push(scope.spawn(move || {
+                chunk
+                    .iter()
+                    .map(|lexed| {
+                        let source = source_map
+                            .get(lexed.file_id())
+                            .expect("lexed file has source");
+                        parse_file(lexed, source)
+                    })
+                    .collect::<Vec<_>>()
+            }));
+        }
+
+        let mut parsed = Vec::with_capacity(lexed_files.len());
+        for handle in handles {
+            match handle.join() {
+                Ok(mut chunk) => parsed.append(&mut chunk),
+                Err(payload) => std::panic::resume_unwind(payload),
+            }
+        }
+        parsed
+    });
+    parsed.sort_by_key(|module| module.file_id().raw());
+    parsed
 }
 
 pub(crate) struct Parser<'a> {
@@ -178,9 +221,7 @@ impl<'a> Parser<'a> {
                 self.parse_method_decl()
             }
             TokenKind::Keyword(Keyword::Test) => self.parse_test_decl(),
-            TokenKind::Identifier
-                if self.peek_n(1).kind() == TokenKind::Punct(Punct::Colon) =>
-            {
+            TokenKind::Identifier if self.peek_n(1).kind() == TokenKind::Punct(Punct::Colon) => {
                 self.parse_field_decl()
             }
             _ => self.parse_member_error(),
@@ -233,11 +274,8 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_method_head(&mut self) {
-        if self.eat_keyword(Keyword::Asm) {
-            self.expect_keyword(Keyword::Fn, "expected item");
-        } else {
-            self.expect_keyword(Keyword::Fn, "expected item");
-        }
+        let _ = self.eat_keyword(Keyword::Asm);
+        self.expect_keyword(Keyword::Fn, "expected item");
         self.expect_identifier();
         self.parse_generic_param_list();
         self.parse_param_list();
@@ -314,11 +352,13 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_member_error(&mut self) {
-        let span = self.peek().span();
         self.start_node(SyntaxKind::RecoveryNode);
-        self.diagnostic(span, "unexpected token in class body");
-        self.builder.error(SyntaxErrorKind::UnexpectedToken, span);
+        self.error_at_current(
+            SyntaxErrorKind::UnexpectedToken,
+            "unexpected token in class body",
+        );
         self.bump();
+        self.consume_to_member_boundary();
         self.finish_node();
     }
 
@@ -400,11 +440,10 @@ impl<'a> Parser<'a> {
     }
 
     pub(crate) fn parse_error_item(&mut self) {
-        let span = self.peek().span();
         self.start_node(SyntaxKind::RecoveryNode);
-        self.diagnostic(span, "expected item");
-        self.builder.error(SyntaxErrorKind::ExpectedItem, span);
+        self.error_at_current(SyntaxErrorKind::ExpectedItem, "expected item");
         self.bump();
+        self.consume_to_item_boundary();
         self.finish_node();
     }
 
@@ -420,7 +459,10 @@ impl<'a> Parser<'a> {
                 && self.peek().kind() != TokenKind::Punct(Punct::CloseBrace)
                 && self.peek().kind() != TokenKind::Eof
             {
-                self.error_at_current(SyntaxErrorKind::UnexpectedToken, "unexpected token in statement");
+                self.error_at_current(
+                    SyntaxErrorKind::UnexpectedToken,
+                    "unexpected token in statement",
+                );
                 self.bump();
             }
         }
@@ -432,6 +474,12 @@ impl<'a> Parser<'a> {
         match self.peek().kind() {
             TokenKind::Keyword(Keyword::Let) => self.parse_let_stmt(),
             TokenKind::Keyword(Keyword::Return) => self.parse_return_stmt(),
+            TokenKind::Keyword(Keyword::Match) => self.parse_match_stmt(),
+            TokenKind::Keyword(Keyword::Repeat) => self.parse_repeat_stmt(),
+            TokenKind::Keyword(Keyword::For) => self.parse_for_stmt(),
+            TokenKind::Keyword(Keyword::Drain) => self.parse_drain_stmt(),
+            TokenKind::Keyword(Keyword::Loop) => self.parse_loop_stmt(),
+            TokenKind::Keyword(Keyword::Assert) => self.parse_assert_stmt(),
             _ => self.parse_expr_stmt(),
         }
     }
@@ -474,8 +522,107 @@ impl<'a> Parser<'a> {
 
     fn parse_expr_stmt(&mut self) {
         self.start_node(SyntaxKind::ExprStmt);
+        let diagnostics_before = self.diagnostics.len();
         self.parse_expr();
+        if self.diagnostics.len() > diagnostics_before {
+            self.recover_to_statement_boundary();
+        }
         self.eat_punct(Punct::Semicolon);
+        self.finish_node();
+    }
+
+    fn parse_match_stmt(&mut self) {
+        self.start_node(SyntaxKind::MatchStmt);
+        self.bump();
+        self.parse_expr();
+        self.expect_punct(Punct::OpenBrace, "expected '{'");
+        while self.peek().kind() != TokenKind::Punct(Punct::CloseBrace)
+            && self.peek().kind() != TokenKind::Eof
+        {
+            self.parse_match_arm();
+        }
+        self.expect_close_punct(Punct::CloseBrace, "expected '}'");
+        self.finish_node();
+    }
+
+    fn parse_match_arm(&mut self) {
+        self.start_node(SyntaxKind::MatchArm);
+        self.parse_match_pattern();
+        self.expect_punct(Punct::FatArrow, "expected match arm");
+        if self.peek().kind() == TokenKind::Punct(Punct::OpenBrace) {
+            self.parse_block();
+        } else {
+            self.parse_stmt();
+        }
+        self.finish_node();
+    }
+
+    fn parse_match_pattern(&mut self) {
+        self.start_node(SyntaxKind::MatchPattern);
+        match self.peek().kind() {
+            TokenKind::Identifier | TokenKind::IntLiteral | TokenKind::StringLiteral => {
+                self.bump();
+                while self.eat_punct(Punct::Dot) {
+                    self.expect_identifier();
+                }
+                if self.eat_punct(Punct::DotDot) || self.eat_punct(Punct::DotDotEq) {
+                    if self.peek().kind() == TokenKind::IntLiteral {
+                        self.bump();
+                    } else {
+                        self.expect_identifier();
+                    }
+                }
+            }
+            _ => self.error_at_current(SyntaxErrorKind::ExpectedMatchArm, "expected match arm"),
+        }
+        self.finish_node();
+    }
+
+    fn parse_repeat_stmt(&mut self) {
+        self.start_node(SyntaxKind::RepeatStmt);
+        self.bump();
+        self.parse_expr();
+        self.expect_keyword(Keyword::As, "expected as in repeat statement");
+        self.expect_binding_name();
+        self.parse_block();
+        self.finish_node();
+    }
+
+    fn parse_for_stmt(&mut self) {
+        self.start_node(SyntaxKind::ForStmt);
+        self.bump();
+        self.expect_binding_name();
+        self.expect_contextual_identifier("in", "expected 'in' in for statement");
+        self.parse_expr();
+        self.parse_block();
+        self.finish_node();
+    }
+
+    fn parse_drain_stmt(&mut self) {
+        self.start_node(SyntaxKind::DrainStmt);
+        self.bump();
+        self.parse_expr();
+        self.expect_keyword(Keyword::As, "expected as in drain statement");
+        self.expect_binding_name();
+        self.parse_block();
+        self.finish_node();
+    }
+
+    fn parse_loop_stmt(&mut self) {
+        self.start_node(SyntaxKind::LoopStmt);
+        self.bump();
+        self.parse_block();
+        self.finish_node();
+    }
+
+    fn parse_assert_stmt(&mut self) {
+        self.start_node(SyntaxKind::AssertStmt);
+        self.bump();
+        if self.eat_keyword(Keyword::Value) || self.eat_keyword(Keyword::Same) {
+            self.parse_expr();
+        } else {
+            self.error_at_current(SyntaxErrorKind::ExpectedAssertKind, "expected assert kind");
+        }
         self.finish_node();
     }
 

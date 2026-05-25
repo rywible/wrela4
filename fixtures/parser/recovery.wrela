@@ -1,0 +1,18 @@
+class Broken {
+    fn first(read self) -> None {
+        let dangling
+        return
+    }
+
+    trap unexpected
+
+    fn second(read self) -> None {
+        return
+    }
+}
+
+class After {
+    fn ok(read self) -> None {
+        return
+    }
+}

@@ -1,0 +1,14 @@
+class Control {
+    fn run(read self, raw: U32) -> U32 {
+        match raw {
+            0 => return 0
+            2..=15 => return raw
+            _ => return 99
+        }
+
+        repeat 4 as i { worker.step(i) }
+        for row in table.rows(mask) { worker.row(row) }
+        drain queue.up_to(8) as packet { worker.packet(packet) }
+        loop { return 0 }
+    }
+}
