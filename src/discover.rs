@@ -31,6 +31,10 @@ impl DiscoverResult {
     pub fn diagnostics(&self) -> &[Diagnostic] {
         &self.diagnostics
     }
+
+    pub fn into_lexed_files(self) -> Vec<LexedFile> {
+        self.lexed_files
+    }
 }
 
 struct ImportLoadRecord {

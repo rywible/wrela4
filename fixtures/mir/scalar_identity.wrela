@@ -1,0 +1,8 @@
+module perf.scalar_identity
+
+pub class IdentityBench {
+    fn run(read self) -> U32 {
+        let result: U32 = 7 + 0
+        return result
+    }
+}

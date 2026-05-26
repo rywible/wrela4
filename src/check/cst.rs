@@ -37,6 +37,14 @@ impl<'a> CstView<'a> {
         }
     }
 
+    pub fn tree(&self) -> &'a SyntaxTree {
+        self.tree
+    }
+
+    pub fn lexed(&self) -> &'a LexedFile {
+        self.lexed
+    }
+
     pub fn node_kind(&self, node: SyntaxNodeId) -> SyntaxKind {
         self.tree.node(node).kind()
     }

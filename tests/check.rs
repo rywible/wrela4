@@ -562,3 +562,15 @@ fn check_rejects_format_flag_after_root_path() {
             .contains("malformed command")
     );
 }
+
+#[test]
+fn check_accepts_filter_sum_dataplane_subset() {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("fixtures")
+        .join("mir")
+        .join("dataplane")
+        .join("filter_sum.wrela");
+
+    let result = wrela::check::check_root(root);
+    assert!(result.ok(), "{:?}", result.diagnostics());
+}

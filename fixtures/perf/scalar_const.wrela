@@ -1,0 +1,7 @@
+module perf.scalar_const
+
+pub class ConstBench {
+    fn run(read self) -> U32 {
+        return 3
+    }
+}

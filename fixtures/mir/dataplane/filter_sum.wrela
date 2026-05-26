@@ -1,0 +1,27 @@
+module perf.filter_sum
+
+pub data Packet {
+    len: U32
+    flags: U32
+}
+
+pub class FilterSumBench {
+    fn run(
+        read self,
+        read packets: Table[Packet, 256],
+        read valid: Mask[packets, 256],
+        read small: Table[Packet, 128],
+        read small_valid: Mask[small, 128],
+    ) -> U64 {
+        let total = reduce packets.rows(valid) as row, acc: U64 = 0 {
+            return acc + packets.len[row]
+        }
+        let flagged = reduce packets.rows(valid) as row, acc: U64 = 0 {
+            return acc + packets.flags[row]
+        }
+        let small_total = reduce small.rows(small_valid) as row, acc: U64 = 0 {
+            return acc + small.len[row]
+        }
+        return total + flagged + small_total
+    }
+}

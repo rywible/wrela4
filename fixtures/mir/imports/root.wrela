@@ -1,0 +1,10 @@
+module app.root
+
+use { Bytes, Helper } from lib
+
+pub class App {
+    fn run(read self, read input: U32) -> U32 {
+        let copy: U32 = input + input
+        return copy
+    }
+}

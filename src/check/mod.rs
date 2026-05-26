@@ -81,6 +81,7 @@ fn module_inputs<'a>(
 #[derive(Debug)]
 pub struct CheckResult {
     source_map: SourceMap,
+    lexed_files: Vec<LexedFile>,
     parsed: Vec<ParsedSyntax>,
     summaries: Vec<CheckModuleSummary>,
     resolved_graph: ResolvedGraph,
@@ -96,6 +97,10 @@ pub struct CheckResult {
 impl CheckResult {
     pub fn source_map(&self) -> &SourceMap {
         &self.source_map
+    }
+
+    pub fn lexed_files(&self) -> &[LexedFile] {
+        &self.lexed_files
     }
 
     pub fn parsed(&self) -> &[ParsedSyntax] {
@@ -211,8 +216,11 @@ pub fn check_root(root: impl AsRef<Path>) -> CheckResult {
         layout_check.diagnostics().len(),
     );
 
+    let lexed_files = discovered.into_lexed_files();
+
     CheckResult {
         source_map,
+        lexed_files,
         parsed,
         summaries,
         resolved_graph,

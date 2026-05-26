@@ -6,6 +6,30 @@ use crate::lexer::{LexedFile, Token, Trivia, lex_file};
 use crate::source::{FileId, SourceFile, SourceMap, Span};
 use crate::syntax::{parse_files_parallel, summarize_module};
 
+fn write_help_banner<W: std::io::Write>(out: &mut W) -> std::io::Result<()> {
+    writeln!(out, "wrela commands: help, version")?;
+    writeln!(out, "wrela lex <root.wrela>")?;
+    writeln!(out, "wrela parse <root.wrela>")?;
+    writeln!(out, "wrela check [--json|--human] <root.wrela>")?;
+    writeln!(out, "wrela dump tokens <file.wrela>")?;
+    writeln!(out, "wrela dump mir <root.wrela>")?;
+    writeln!(out, "wrela dump asm <root.wrela>")?;
+    writeln!(
+        out,
+        "wrela debug mir [--why-rewrite N] [--enable-pass NAME|--disable-pass NAME|--only-pass NAME] <root.wrela>"
+    )?;
+    writeln!(
+        out,
+        "wrela perf compile [--mode dev|release] [--repeat N] [--json|--human] <root.wrela>"
+    )?;
+    writeln!(
+        out,
+        "wrela perf code [--mode dev|release] [--repeat N] [--enable-pass NAME|--disable-pass NAME|--only-pass NAME] <root.wrela>"
+    )?;
+    writeln!(out, "wrela perf compare [--repeat N] <root.wrela>")?;
+    Ok(())
+}
+
 pub fn run<I>(args: I) -> i32
 where
     I: IntoIterator<Item = String>,
@@ -29,19 +53,11 @@ where
                 let _ = writeln!(err, "malformed command");
                 return 2;
             }
-            let _ = writeln!(out, "wrela commands: help, version");
-            let _ = writeln!(out, "wrela lex <root.wrela>");
-            let _ = writeln!(out, "wrela parse <root.wrela>");
-            let _ = writeln!(out, "wrela check [--json|--human] <root.wrela>");
-            let _ = writeln!(out, "wrela dump tokens <file.wrela>");
+            let _ = write_help_banner(out);
             0
         }
         None => {
-            let _ = writeln!(out, "wrela commands: help, version");
-            let _ = writeln!(out, "wrela lex <root.wrela>");
-            let _ = writeln!(out, "wrela parse <root.wrela>");
-            let _ = writeln!(out, "wrela check [--json|--human] <root.wrela>");
-            let _ = writeln!(out, "wrela dump tokens <file.wrela>");
+            let _ = write_help_banner(out);
             0
         }
         Some("version") => {
@@ -67,11 +83,40 @@ where
                     2
                 }
             },
+            Some("mir") => match collected.get(3) {
+                Some(path) => {
+                    if collected.len() > 4 {
+                        let _ = writeln!(err, "malformed command");
+                        2
+                    } else {
+                        dump_mir(path, out, err)
+                    }
+                }
+                None => {
+                    let _ = writeln!(err, "missing root file path");
+                    2
+                }
+            },
+            Some("asm") => match collected.get(3) {
+                Some(path) => {
+                    if collected.len() > 4 {
+                        let _ = writeln!(err, "malformed command");
+                        2
+                    } else {
+                        dump_asm(path, out, err)
+                    }
+                }
+                None => {
+                    let _ = writeln!(err, "missing root file path");
+                    2
+                }
+            },
             _ => {
                 let _ = writeln!(err, "malformed command");
                 2
             }
         },
+        Some("perf") => run_perf_command(&collected, out, err),
         Some("lex") => match collected.get(2) {
             Some(path) => {
                 if collected.len() > 3 {
@@ -101,11 +146,466 @@ where
             }
         },
         Some("check") => run_check_command(&collected, out, err),
+        Some("debug") => match collected.get(2).map(String::as_str) {
+            Some("mir") => run_debug_mir(&collected, out, err),
+            _ => {
+                let _ = writeln!(err, "malformed command");
+                2
+            }
+        },
         Some(other) => {
             let _ = writeln!(err, "unknown command: {other}");
             2
         }
     }
+}
+
+fn dump_asm<W, E>(path: &str, out: &mut W, err: &mut E) -> i32
+where
+    W: std::io::Write,
+    E: std::io::Write,
+{
+    let check = crate::check::check_root(path);
+    if !check.ok() {
+        print_diagnostics(out, check.diagnostics());
+        return 1;
+    }
+    let mir = crate::mir::build_mir(&check);
+    if !mir.ok() {
+        print_diagnostics(out, mir.diagnostics());
+        return 1;
+    }
+    let lir = crate::mir::lower_to_lir(mir.module().expect("ok MIR has module"));
+    let lir_check = crate::mir::verify_lir(&lir);
+    if !lir_check.ok() {
+        for message in lir_check.messages() {
+            let _ = writeln!(err, "{message}");
+        }
+        return 1;
+    }
+    let allocated = match crate::mir::regalloc::allocate_registers(&lir) {
+        Ok(allocated) => allocated,
+        Err(error) => {
+            let _ = writeln!(err, "{}", error.message());
+            return 1;
+        }
+    };
+    let asm = crate::mir::emit::emit_aarch64(&allocated);
+    let _ = out.write_all(asm.as_bytes());
+    0
+}
+
+struct PerfCompileArgs {
+    path: String,
+    mode: crate::mir::perf::PerfMode,
+    repeats: usize,
+    json: bool,
+}
+
+struct PerfCodeArgs {
+    path: String,
+    mode: crate::mir::perf::PerfMode,
+    repeats: usize,
+    pass_set: crate::mir::PassSet,
+}
+
+fn run_debug_mir<W, E>(args: &[String], out: &mut W, err: &mut E) -> i32
+where
+    W: std::io::Write,
+    E: std::io::Write,
+{
+    let mut rewrite_index: Option<usize> = None;
+    let mut pass_set = crate::mir::PassSet::release_default();
+    let mut path = None;
+    let mut index = 3;
+    while index < args.len() {
+        match args[index].as_str() {
+            "--why-rewrite" => {
+                let Some(value) = args.get(index + 1) else {
+                    let _ = writeln!(err, "missing value for --why-rewrite");
+                    return 2;
+                };
+                rewrite_index = value
+                    .parse()
+                    .map_err(|_| {
+                        let _ = writeln!(err, "invalid --why-rewrite value");
+                    })
+                    .ok();
+                if rewrite_index.is_none() {
+                    return 2;
+                }
+                index += 2;
+            }
+            "--only-pass" => {
+                let Some(name) = args.get(index + 1) else {
+                    let _ = writeln!(err, "missing value for --only-pass");
+                    return 2;
+                };
+                let Some(pass) = crate::mir::Pass::from_name(name) else {
+                    let _ = writeln!(err, "unknown release pass: {name}");
+                    return 2;
+                };
+                pass_set = crate::mir::PassSet::only(pass);
+                index += 2;
+            }
+            flag if flag.starts_with("--") => {
+                let _ = writeln!(err, "unknown flag: {flag}");
+                return 2;
+            }
+            value => {
+                if path.is_some() {
+                    let _ = writeln!(err, "malformed command");
+                    return 2;
+                }
+                path = Some(value.to_string());
+                index += 1;
+            }
+        }
+    }
+    let Some(path) = path else {
+        let _ = writeln!(err, "missing root file path");
+        return 2;
+    };
+    let Some(rewrite_index) = rewrite_index else {
+        let _ = writeln!(err, "missing --why-rewrite index");
+        return 2;
+    };
+
+    let check = crate::check::check_root(&path);
+    if !check.ok() {
+        print_diagnostics(out, check.diagnostics());
+        return 1;
+    }
+    let mir = crate::mir::build_mir(&check);
+    if !mir.ok() {
+        print_diagnostics(out, mir.diagnostics());
+        return 1;
+    }
+    let optimized =
+        crate::mir::optimize_release(mir.module().expect("ok MIR has module"), &pass_set);
+    let Some(event): Option<&crate::mir::RewriteEvent> =
+        optimized.report().rewrite_events().get(rewrite_index)
+    else {
+        let _ = writeln!(err, "rewrite event index out of range");
+        return 2;
+    };
+    let cert = event.certificate();
+    let _ = writeln!(out, "rule: {}", cert.rule().name());
+    let _ = writeln!(out, "pass: {}", cert.pass().name());
+    let _ = writeln!(out, "before: {}", cert.before_hash());
+    let _ = writeln!(out, "after: {}", cert.after_hash());
+    for fact in cert.facts() {
+        let _ = writeln!(out, "fact: {fact:?}");
+    }
+    0
+}
+
+fn run_perf_command<W, E>(args: &[String], out: &mut W, err: &mut E) -> i32
+where
+    W: std::io::Write,
+    E: std::io::Write,
+{
+    match args.get(2).map(String::as_str) {
+        Some("compile") => run_perf_compile(args, out, err),
+        Some("code") => run_perf_code(args, out, err),
+        Some("compare") => run_perf_compare(args, out, err),
+        _ => {
+            let _ = writeln!(err, "malformed command");
+            2
+        }
+    }
+}
+
+fn run_perf_compile<W, E>(args: &[String], out: &mut W, err: &mut E) -> i32
+where
+    W: std::io::Write,
+    E: std::io::Write,
+{
+    let parsed = match parse_perf_compile_args(args) {
+        Ok(parsed) => parsed,
+        Err(message) => {
+            let _ = writeln!(err, "{message}");
+            return 2;
+        }
+    };
+    let report = match crate::mir::perf::measure_compile(&parsed.path, parsed.mode, parsed.repeats)
+    {
+        Ok(report) => report,
+        Err(message) => {
+            let _ = writeln!(err, "{message}");
+            return 1;
+        }
+    };
+    let rendered = if parsed.json {
+        crate::mir::perf::render_compile_json(&report)
+    } else {
+        crate::mir::perf::render_compile_human(&report)
+    };
+    let _ = out.write_all(rendered.as_bytes());
+    0
+}
+
+fn run_perf_compare<W, E>(args: &[String], out: &mut W, err: &mut E) -> i32
+where
+    W: std::io::Write,
+    E: std::io::Write,
+{
+    let mut repeats = 7usize;
+    let mut path = None;
+    let mut index = 3;
+    while index < args.len() {
+        match args[index].as_str() {
+            "--repeat" => {
+                let Some(value) = args.get(index + 1) else {
+                    let _ = writeln!(err, "missing value for --repeat");
+                    return 2;
+                };
+                repeats = match value.parse::<usize>() {
+                    Ok(parsed) => parsed,
+                    Err(_) => {
+                        let _ = writeln!(err, "invalid --repeat value");
+                        return 2;
+                    }
+                };
+                index += 2;
+            }
+            "--json" => {
+                let _ = writeln!(err, "perf compare always emits JSON; omit --json");
+                return 2;
+            }
+            flag if flag.starts_with("--") => {
+                let _ = writeln!(err, "unknown flag: {flag}");
+                return 2;
+            }
+            value => {
+                if path.is_some() {
+                    let _ = writeln!(err, "malformed command");
+                    return 2;
+                }
+                path = Some(value.to_string());
+                index += 1;
+            }
+        }
+    }
+    let Some(path) = path else {
+        let _ = writeln!(err, "missing root file path");
+        return 2;
+    };
+    let report = match crate::mir::perf::compare_code(&path, repeats) {
+        Ok(report) => report,
+        Err(message) => {
+            let _ = writeln!(err, "{message}");
+            if message.contains("generated-code execution is not supported") {
+                return 2;
+            }
+            return 1;
+        }
+    };
+    let rendered = crate::mir::perf::render_compare_json(&report);
+    let _ = out.write_all(rendered.as_bytes());
+    0
+}
+
+fn run_perf_code<W, E>(args: &[String], out: &mut W, err: &mut E) -> i32
+where
+    W: std::io::Write,
+    E: std::io::Write,
+{
+    let parsed = match parse_perf_code_args(args) {
+        Ok(parsed) => parsed,
+        Err(message) => {
+            let _ = writeln!(err, "{message}");
+            return 2;
+        }
+    };
+    let report = match crate::mir::perf::measure_code(
+        &parsed.path,
+        parsed.mode,
+        parsed.repeats,
+        &parsed.pass_set,
+    ) {
+        Ok(report) => report,
+        Err(message) => {
+            let _ = writeln!(err, "{message}");
+            if message.contains("generated-code execution is not supported")
+                || message.contains("data-plane generated-code execution is MIR 05 work")
+            {
+                return 2;
+            }
+            return 1;
+        }
+    };
+    let rendered = crate::mir::perf::render_code_json(&report);
+    let _ = out.write_all(rendered.as_bytes());
+    0
+}
+
+fn parse_perf_compile_args(args: &[String]) -> Result<PerfCompileArgs, String> {
+    let mut mode = crate::mir::perf::PerfMode::Dev;
+    let mut repeats = 1usize;
+    let mut json = false;
+    let mut path = None;
+
+    let mut index = 3;
+    while index < args.len() {
+        match args[index].as_str() {
+            "--mode" => {
+                let Some(value) = args.get(index + 1) else {
+                    return Err("missing value for --mode".to_string());
+                };
+                mode = match value.as_str() {
+                    "dev" => crate::mir::perf::PerfMode::Dev,
+                    "release" => crate::mir::perf::PerfMode::Release,
+                    other => return Err(format!("unknown mode: {other}")),
+                };
+                index += 2;
+            }
+            "--repeat" => {
+                let Some(value) = args.get(index + 1) else {
+                    return Err("missing value for --repeat".to_string());
+                };
+                repeats = value
+                    .parse()
+                    .map_err(|_| "invalid --repeat value".to_string())?;
+                index += 2;
+            }
+            "--json" => {
+                json = true;
+                index += 1;
+            }
+            flag if flag.starts_with("--") => {
+                return Err(format!("unknown flag: {flag}"));
+            }
+            value => {
+                if path.is_some() {
+                    return Err("malformed command".to_string());
+                }
+                path = Some(value.to_string());
+                index += 1;
+            }
+        }
+    }
+
+    let Some(path) = path else {
+        return Err("missing root file path".to_string());
+    };
+
+    Ok(PerfCompileArgs {
+        path,
+        mode,
+        repeats,
+        json,
+    })
+}
+
+fn parse_perf_code_args(args: &[String]) -> Result<PerfCodeArgs, String> {
+    let mut mode = crate::mir::perf::PerfMode::Dev;
+    let mut repeats = 1usize;
+    let mut path = None;
+    let mut pass_set = crate::mir::PassSet::release_default();
+
+    let mut index = 3;
+    while index < args.len() {
+        match args[index].as_str() {
+            "--mode" => {
+                let Some(value) = args.get(index + 1) else {
+                    return Err("missing value for --mode".to_string());
+                };
+                mode = match value.as_str() {
+                    "dev" => crate::mir::perf::PerfMode::Dev,
+                    "release" => crate::mir::perf::PerfMode::Release,
+                    other => return Err(format!("unknown mode: {other}")),
+                };
+                index += 2;
+            }
+            "--repeat" => {
+                let Some(value) = args.get(index + 1) else {
+                    return Err("missing value for --repeat".to_string());
+                };
+                repeats = value
+                    .parse()
+                    .map_err(|_| "invalid --repeat value".to_string())?;
+                index += 2;
+            }
+            "--json" => {
+                return Err("perf code always emits JSON; omit --json".to_string());
+            }
+            "--enable-pass" => {
+                let Some(name) = args.get(index + 1) else {
+                    return Err("missing value for --enable-pass".to_string());
+                };
+                let Some(pass) = crate::mir::Pass::from_name(name) else {
+                    return Err(format!("unknown release pass: {name}"));
+                };
+                pass_set = pass_set.with_enabled(pass);
+                index += 2;
+            }
+            "--disable-pass" => {
+                let Some(name) = args.get(index + 1) else {
+                    return Err("missing value for --disable-pass".to_string());
+                };
+                let Some(pass) = crate::mir::Pass::from_name(name) else {
+                    return Err(format!("unknown release pass: {name}"));
+                };
+                pass_set = pass_set.with_disabled(pass);
+                index += 2;
+            }
+            "--only-pass" => {
+                let Some(name) = args.get(index + 1) else {
+                    return Err("missing value for --only-pass".to_string());
+                };
+                let Some(pass) = crate::mir::Pass::from_name(name) else {
+                    return Err(format!("unknown release pass: {name}"));
+                };
+                pass_set = crate::mir::PassSet::only(pass);
+                index += 2;
+            }
+            flag if flag.starts_with("--") => {
+                return Err(format!("unknown flag: {flag}"));
+            }
+            value => {
+                if path.is_some() {
+                    return Err("malformed command".to_string());
+                }
+                path = Some(value.to_string());
+                index += 1;
+            }
+        }
+    }
+
+    let Some(path) = path else {
+        return Err("missing root file path".to_string());
+    };
+
+    Ok(PerfCodeArgs {
+        path,
+        mode,
+        repeats,
+        pass_set,
+    })
+}
+
+fn dump_mir<W, E>(path: &str, out: &mut W, _err: &mut E) -> i32
+where
+    W: std::io::Write,
+    E: std::io::Write,
+{
+    let check = crate::check::check_root(path);
+    if !check.ok() {
+        print_diagnostics(out, check.diagnostics());
+        return 1;
+    }
+
+    let mir = crate::mir::build_mir(&check);
+    if !mir.ok() {
+        print_diagnostics(out, mir.diagnostics());
+        return 1;
+    }
+
+    let module = mir.module().expect("ok MIR result has module");
+    let text = crate::mir::text::render_module(module);
+    let _ = out.write_all(text.as_bytes());
+    0
 }
 
 fn dump_tokens<W, E>(path: &str, out: &mut W, err: &mut E) -> i32
@@ -386,7 +886,48 @@ mod tests {
         assert!(out.contains("wrela lex <root.wrela>"));
         assert!(out.contains("wrela parse <root.wrela>"));
         assert!(out.contains("wrela dump tokens <file.wrela>"));
+        assert!(out.contains("wrela dump mir <root.wrela>"));
         assert!(err.is_empty());
+    }
+
+    #[test]
+    fn help_lists_asm_dump_command() {
+        let mut out = Vec::new();
+        let mut err = Vec::new();
+
+        let code = run_with_io(
+            vec!["wrela".to_string(), "help".to_string()],
+            &mut out,
+            &mut err,
+        );
+
+        assert_eq!(code, 0);
+        assert!(err.is_empty());
+        assert!(
+            String::from_utf8(out)
+                .unwrap()
+                .contains("wrela dump asm <root.wrela>")
+        );
+    }
+
+    #[test]
+    fn help_lists_mir_dump_command() {
+        let mut out = Vec::new();
+        let mut err = Vec::new();
+
+        let code = run_with_io(
+            vec!["wrela".to_string(), "help".to_string()],
+            &mut out,
+            &mut err,
+        );
+
+        assert_eq!(code, 0);
+        assert!(err.is_empty());
+        assert!(
+            String::from_utf8(out)
+                .unwrap()
+                .contains("wrela dump mir <root.wrela>")
+        );
     }
 
     #[test]
@@ -452,6 +993,24 @@ mod tests {
                 .contains("malformed command")
         );
         assert!(out.is_empty());
+    }
+
+    #[test]
+    fn help_lists_debug_mir_and_perf_compare() {
+        let mut out = Vec::new();
+        let mut err = Vec::new();
+        let code = run_with_io(
+            vec!["wrela".to_string(), "help".to_string()],
+            &mut out,
+            &mut err,
+        );
+
+        assert_eq!(code, 0);
+        let out = String::from_utf8(out).unwrap();
+        assert!(out.contains("wrela debug mir"));
+        assert!(out.contains("wrela perf compare"));
+        assert!(out.contains("--only-pass"));
+        assert!(err.is_empty());
     }
 
     #[test]

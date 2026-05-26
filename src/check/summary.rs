@@ -67,12 +67,19 @@ pub enum AccessMode {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
+pub enum TypeArgSummary {
+    Type(TypeRefSummary),
+    Int { value: u64, span: Span },
+    ValueName(Name),
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct TypeRefSummary {
     node_id: SyntaxNodeId,
     access: Option<AccessMode>,
     unique: bool,
     path: Vec<Name>,
-    args: Vec<TypeRefSummary>,
+    args: Vec<TypeArgSummary>,
     span: Span,
 }
 
@@ -82,7 +89,7 @@ impl TypeRefSummary {
         access: Option<AccessMode>,
         unique: bool,
         path: Vec<Name>,
-        args: Vec<TypeRefSummary>,
+        args: Vec<TypeArgSummary>,
         span: Span,
     ) -> Self {
         Self {
@@ -111,7 +118,7 @@ impl TypeRefSummary {
         &self.path
     }
 
-    pub fn args(&self) -> &[TypeRefSummary] {
+    pub fn args(&self) -> &[TypeArgSummary] {
         &self.args
     }
 
@@ -762,34 +769,82 @@ fn summarize_param(view: &CstView<'_>, node: SyntaxNodeId) -> Option<ParamSummar
 }
 
 fn summarize_type_ref(view: &CstView<'_>, node: SyntaxNodeId) -> Option<TypeRefSummary> {
-    let access = access_in_node(view, node);
-    let unique = unique_in_node(view, node);
-    let path = view
-        .identifiers_in_node(node)
-        .into_iter()
-        .map(name_from_token)
-        .collect::<Vec<_>>();
+    let generic_args = view
+        .first_child(node, SyntaxKind::GenericArgList)
+        .map(|arg_list| summarize_generic_args(view, arg_list))
+        .unwrap_or_default();
+
+    let path = summarize_direct_type_path(view, node);
     if path.is_empty() {
         return None;
     }
-    let args = view
-        .first_child(node, SyntaxKind::GenericArgList)
-        .map(|arg_list| {
-            view.child_nodes(arg_list)
-                .into_iter()
-                .filter(|child| view.node_kind(*child) == SyntaxKind::TypeRef)
-                .filter_map(|child| summarize_type_ref(view, child))
-                .collect()
-        })
-        .unwrap_or_default();
+
     Some(TypeRefSummary::new(
         node,
-        access,
-        unique,
+        summarize_access_mode(view, node),
+        summarize_unique_marker(view, node),
         path,
-        args,
+        generic_args,
         view.node_span(node),
     ))
+}
+
+fn summarize_direct_type_path(view: &CstView<'_>, type_ref: SyntaxNodeId) -> Vec<Name> {
+    let mut names = Vec::new();
+    for token in view.child_tokens(type_ref) {
+        let text = view.token_text(token).text();
+        if text == "[" {
+            break;
+        }
+        if matches!(text, "read" | "mut" | "own" | "unique" | ".") {
+            continue;
+        }
+        if is_identifier_text(text) {
+            names.push(name_from_token(view.token_text(token)));
+        }
+    }
+    names
+}
+
+fn summarize_generic_args(view: &CstView<'_>, arg_list: SyntaxNodeId) -> Vec<TypeArgSummary> {
+    let mut args = Vec::new();
+    for child in view.child_nodes(arg_list) {
+        if view.node_kind(child) == SyntaxKind::TypeRef {
+            if let Some(ty) = summarize_type_ref(view, child) {
+                args.push(TypeArgSummary::Type(ty));
+            }
+        }
+    }
+    for token in view.child_tokens(arg_list) {
+        let text = view.token_text(token);
+        if let Ok(value) = text.text().parse::<u64>() {
+            args.push(TypeArgSummary::Int {
+                value,
+                span: text.span(),
+            });
+        } else if is_identifier_text(text.text()) {
+            args.push(TypeArgSummary::ValueName(name_from_token(text)));
+        }
+    }
+    args
+}
+
+fn summarize_access_mode(view: &CstView<'_>, node: SyntaxNodeId) -> Option<AccessMode> {
+    access_in_node(view, node)
+}
+
+fn summarize_unique_marker(view: &CstView<'_>, node: SyntaxNodeId) -> bool {
+    unique_in_node(view, node)
+}
+
+fn is_identifier_text(text: &str) -> bool {
+    let Some(first) = text.chars().next() else {
+        return false;
+    };
+    (first.is_ascii_alphabetic() || first == '_')
+        && text
+            .chars()
+            .all(|ch| ch.is_ascii_alphanumeric() || ch == '_')
 }
 
 fn access_in_node(view: &CstView<'_>, node: SyntaxNodeId) -> Option<AccessMode> {

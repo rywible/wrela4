@@ -1,0 +1,19 @@
+module app.main
+
+pub data Bytes {
+    value: U32
+}
+
+pub class Worker {
+    fn run(read self) -> None {
+        return None
+    }
+}
+
+pub unique class MacOSHost {}
+
+pub host image Main {
+    phase run(host: unique MacOSHost) {
+        return None
+    }
+}

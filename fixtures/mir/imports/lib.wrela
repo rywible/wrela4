@@ -1,0 +1,11 @@
+module lib
+
+pub data Bytes {
+    value: U32
+}
+
+pub class Helper {
+    fn id(read self, read input: U32) -> U32 {
+        return input + input
+    }
+}

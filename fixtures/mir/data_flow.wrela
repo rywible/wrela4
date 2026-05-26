@@ -1,0 +1,8 @@
+module app.flow
+
+pub class Calculator {
+    fn add(read self, read left: U32, read right: U32) -> U32 {
+        let sum: U32 = left + right
+        return sum
+    }
+}
